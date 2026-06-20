@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"devshard/types"
 )
@@ -78,6 +80,10 @@ func (h *HybridStorage) DeleteSealedInferences(escrowID string) error {
 	return h.backend.DeleteSealedInferences(escrowID)
 }
 
+func (h *HybridStorage) ClearValidationObs(escrowID string) error {
+	return h.backend.ClearValidationObs(escrowID)
+}
+
 func (h *HybridStorage) RecordValidationsAppliedOnce(escrowID string, entries []ValidationObsEntry) error {
 	return h.backend.RecordValidationsAppliedOnce(escrowID, entries)
 }
@@ -92,6 +98,30 @@ func (h *HybridStorage) GetValidationObservability(escrowID string) ([]SlotValid
 
 func (h *HybridStorage) PruneEpoch(epochID uint64) error {
 	return h.backend.PruneEpoch(epochID)
+}
+
+func (h *HybridStorage) Acquire(ctx context.Context, escrowID string, inferenceID, epochID uint64, instanceAddr string) (bool, error) {
+	ls, ok := h.backend.(LeaseStore)
+	if !ok {
+		return false, fmt.Errorf("storage backend does not support validation leases")
+	}
+	return ls.Acquire(ctx, escrowID, inferenceID, epochID, instanceAddr)
+}
+
+func (h *HybridStorage) AcquireOneStale(ctx context.Context, escrowID, instanceAddr string, ttl time.Duration) (uint64, uint64, error) {
+	ls, ok := h.backend.(LeaseStore)
+	if !ok {
+		return 0, 0, fmt.Errorf("storage backend does not support validation leases")
+	}
+	return ls.AcquireOneStale(ctx, escrowID, instanceAddr, ttl)
+}
+
+func (h *HybridStorage) SetResult(ctx context.Context, escrowID string, inferenceID uint64, status LeaseStatus) error {
+	ls, ok := h.backend.(LeaseStore)
+	if !ok {
+		return fmt.Errorf("storage backend does not support validation leases")
+	}
+	return ls.SetResult(ctx, escrowID, inferenceID, status)
 }
 
 func (h *HybridStorage) pruneBefore(cutoff uint64) error {

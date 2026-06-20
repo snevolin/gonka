@@ -58,6 +58,9 @@ type Storage interface {
 	InsertSealedInference(escrowID string, row InferenceRow) error
 	GetSealedInference(escrowID string, inferenceID uint64) (InferenceRow, bool, error)
 	DeleteSealedInferences(escrowID string) error
+	// ClearValidationObs removes all live and sealed validation observability
+	// rows for an escrow. Used when rebuilding obs from the diff journal.
+	ClearValidationObs(escrowID string) error
 	// RecordValidationsAppliedOnce records required+completed=1 for each
 	// (inference_id, slot_id) entry at most once per escrow epoch, reusing the
 	// devshard_inference_validation_obs unique key as the dedup ledger via
@@ -80,8 +83,10 @@ type ValidationObsEntry struct {
 }
 
 // SlotValidationObs holds per-slot validation counters for observability APIs only.
-// Counters are populated when hosts apply signed diffs (RecordValidationsAppliedOnce).
-// They are persisted across host restarts but are not part of settlement host_stats.
+// Live rows are recorded when hosts apply signed diffs (RecordValidationsAppliedOnce)
+// and move to sealed storage on inference seal (DrainInferenceValidationObs).
+// Recovery rebuilds both tables from the diff journal (RebuildValidationObsFromDiffs).
+// Counters are not part of settlement host_stats.
 type SlotValidationObs struct {
 	SlotID               uint32
 	RequiredValidations  uint32

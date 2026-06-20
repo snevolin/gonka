@@ -34,6 +34,23 @@ type serverTestEnv struct {
 	config     types.SessionConfig
 }
 
+// registerServer wires srv's handlers onto g exactly as the old Server.Register
+// method did. Kept in tests; production wiring uses server/routes.go RegisterLazySessionRoutes.
+func registerServer(g *echo.Group, srv *Server) {
+	g.Use(srv.AuthMiddleware)
+	if srv.rateLimit != nil {
+		g.Use(rateLimitMiddleware(srv.rateLimit, true))
+	}
+	g.POST("/sessions/:id/chat/completions", srv.HandleInference)
+	g.POST("/sessions/:id/verify-timeout", srv.HandleVerifyTimeout)
+	g.POST("/sessions/:id/challenge-receipt", srv.HandleChallengeReceipt)
+	g.POST("/sessions/:id/gossip/nonce", srv.HandleGossipNonce)
+	g.POST("/sessions/:id/gossip/txs", srv.HandleGossipTxs)
+	g.GET("/sessions/:id/diffs", srv.HandleGetDiffs)
+	g.GET("/sessions/:id/mempool", srv.HandleGetMempool)
+	g.GET("/sessions/:id/signatures", srv.HandleGetSignatures)
+}
+
 func setupServerEnv(t *testing.T) *serverTestEnv {
 	t.Helper()
 	hostSigner := testutil.MustGenerateKey(t)
@@ -61,8 +78,8 @@ func setupServerEnv(t *testing.T) *serverTestEnv {
 	require.NoError(t, err)
 
 	e := echo.New()
-	g := e.Group("/v1/devshard")
-	srv.Register(g)
+	g := e.Group("/devshard/v2")
+	registerServer(g, srv)
 
 	return &serverTestEnv{
 		server:     srv,
@@ -121,7 +138,7 @@ func TestServer_Inference_ValidAuth(t *testing.T) {
 	body, err := json.Marshal(ir)
 	require.NoError(t, err)
 
-	rec := env.doPost(t, "/v1/devshard/sessions/escrow-1/chat/completions", body)
+	rec := env.doPost(t, "/devshard/v2/sessions/escrow-1/chat/completions", body)
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	require.Equal(t, "text/event-stream", rec.Header().Get("Content-Type"))
 
@@ -159,7 +176,7 @@ func TestServer_Inference_NoAuth(t *testing.T) {
 	env := setupServerEnv(t)
 
 	body := []byte(`{}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/devshard/sessions/escrow-1/chat/completions",
+	req := httptest.NewRequest(http.MethodPost, "/devshard/v2/sessions/escrow-1/chat/completions",
 		strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -176,7 +193,7 @@ func TestServer_Inference_NotInGroup(t *testing.T) {
 	sig, err := SignRequest(outsider, "escrow-1", body, ts)
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/devshard/sessions/escrow-1/chat/completions",
+	req := httptest.NewRequest(http.MethodPost, "/devshard/v2/sessions/escrow-1/chat/completions",
 		strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(HeaderSignature, hex.EncodeToString(sig))
@@ -199,11 +216,11 @@ func TestServer_GetDiffs(t *testing.T) {
 		Payload: &PayloadJSON{Prompt: testutil.TestPrompt, Model: "llama", InputLength: 100, MaxTokens: 50, StartedAt: 1000},
 	}
 	body, _ := json.Marshal(ir)
-	rec := env.doPost(t, "/v1/devshard/sessions/escrow-1/chat/completions", body)
+	rec := env.doPost(t, "/devshard/v2/sessions/escrow-1/chat/completions", body)
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	// Now GET diffs.
-	rec = env.doGet(t, "/v1/devshard/sessions/escrow-1/diffs?from=1&to=1")
+	rec = env.doGet(t, "/devshard/v2/sessions/escrow-1/diffs?from=1&to=1")
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var diffs []json.RawMessage
@@ -224,11 +241,11 @@ func TestServer_GetMempool(t *testing.T) {
 		Payload: &PayloadJSON{Prompt: testutil.TestPrompt, Model: "llama", InputLength: 100, MaxTokens: 50, StartedAt: 1000},
 	}
 	body, _ := json.Marshal(ir)
-	rec := env.doPost(t, "/v1/devshard/sessions/escrow-1/chat/completions", body)
+	rec := env.doPost(t, "/devshard/v2/sessions/escrow-1/chat/completions", body)
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	// GET mempool.
-	rec = env.doGet(t, "/v1/devshard/sessions/escrow-1/mempool")
+	rec = env.doGet(t, "/devshard/v2/sessions/escrow-1/mempool")
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var result struct {
@@ -248,14 +265,14 @@ func TestServer_RateLimit(t *testing.T) {
 	require.NoError(t, err)
 
 	e := echo.New()
-	g := e.Group("/v1/devshard")
-	srv.Register(g)
+	g := e.Group("/devshard/v2")
+	registerServer(g, srv)
 
 	body := []byte(`{}`)
 	doReq := func() int {
 		ts := time.Now().Unix()
 		sig, _ := SignRequest(env.userSigner, "escrow-1", body, ts)
-		req := httptest.NewRequest(http.MethodPost, "/v1/devshard/sessions/escrow-1/chat/completions",
+		req := httptest.NewRequest(http.MethodPost, "/devshard/v2/sessions/escrow-1/chat/completions",
 			strings.NewReader(string(body)))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set(HeaderSignature, hex.EncodeToString(sig))
@@ -325,8 +342,8 @@ func TestHandleGossipNonce_WarmKey(t *testing.T) {
 	require.NoError(t, err)
 
 	e := echo.New()
-	g := e.Group("/v1/devshard")
-	srv.Register(g)
+	g := e.Group("/devshard/v2")
+	registerServer(g, srv)
 
 	// Apply diffs through the host to populate storage.
 	_, err = h.HandleRequest(context.Background(), host.HostRequest{Diffs: []types.Diff{diff1, diff2}})
@@ -362,7 +379,7 @@ func TestHandleGossipNonce_WarmKey(t *testing.T) {
 	sig, err := SignRequest(warmSigner, "escrow-1", body, ts)
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/devshard/sessions/escrow-1/gossip/nonce", strings.NewReader(string(body)))
+	req := httptest.NewRequest(http.MethodPost, "/devshard/v2/sessions/escrow-1/gossip/nonce", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(HeaderSignature, hex.EncodeToString(sig))
 	req.Header.Set(HeaderTimestamp, fmt.Sprintf("%d", ts))
@@ -394,7 +411,7 @@ func TestServer_StreamingInference(t *testing.T) {
 	body, err := json.Marshal(ir)
 	require.NoError(t, err)
 
-	rec := env.doPost(t, "/v1/devshard/sessions/escrow-1/chat/completions", body)
+	rec := env.doPost(t, "/devshard/v2/sessions/escrow-1/chat/completions", body)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "text/event-stream", rec.Header().Get("Content-Type"))
 
@@ -446,14 +463,14 @@ func (env *serverTestEnv) doPostAs(t *testing.T, path string, body []byte, signe
 func TestServer_Inference_GroupMemberRejected(t *testing.T) {
 	env := setupServerEnv(t)
 	body := []byte(`{}`)
-	rec := env.doPostAs(t, "/v1/devshard/sessions/escrow-1/chat/completions", body, env.hostSigner)
+	rec := env.doPostAs(t, "/devshard/v2/sessions/escrow-1/chat/completions", body, env.hostSigner)
 	require.Equal(t, http.StatusForbidden, rec.Code)
 }
 
 func TestServer_VerifyTimeout_GroupMemberRejected(t *testing.T) {
 	env := setupServerEnv(t)
 	body := []byte(`{}`)
-	rec := env.doPostAs(t, "/v1/devshard/sessions/escrow-1/verify-timeout", body, env.hostSigner)
+	rec := env.doPostAs(t, "/devshard/v2/sessions/escrow-1/verify-timeout", body, env.hostSigner)
 	require.Equal(t, http.StatusForbidden, rec.Code)
 }
 
@@ -462,7 +479,7 @@ func TestServer_ChallengeReceipt_GroupMemberAllowed(t *testing.T) {
 	// Group members (peer hosts) must be allowed to call ChallengeReceipt
 	// during timeout verification. Empty diffs + no matching inference = 200 with empty receipt.
 	body := []byte(`{"inference_id":999,"diffs":[],"payload":null}`)
-	rec := env.doPostAs(t, "/v1/devshard/sessions/escrow-1/challenge-receipt", body, env.hostSigner)
+	rec := env.doPostAs(t, "/devshard/v2/sessions/escrow-1/challenge-receipt", body, env.hostSigner)
 	require.Equal(t, http.StatusOK, rec.Code)
 }
 
@@ -494,8 +511,8 @@ func TestServer_NonExecutor_SSE(t *testing.T) {
 	require.NoError(t, err)
 
 	e := echo.New()
-	g := e.Group("/v1/devshard")
-	srv.Register(g)
+	g := e.Group("/devshard/v2")
+	registerServer(g, srv)
 
 	diff := testutil.SignDiff(t, userSigner, "escrow-1", 1, []*types.DevshardTx{testutil.StartTx(1)})
 	dj, err := DiffToJSON(diff)
@@ -512,7 +529,7 @@ func TestServer_NonExecutor_SSE(t *testing.T) {
 	sig, sigErr := SignRequest(userSigner, "escrow-1", body, reqTime)
 	ts.NoError(sigErr)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/devshard/sessions/escrow-1/chat/completions", strings.NewReader(string(body)))
+	req := httptest.NewRequest(http.MethodPost, "/devshard/v2/sessions/escrow-1/chat/completions", strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(HeaderSignature, hex.EncodeToString(sig))
 	req.Header.Set(HeaderTimestamp, fmt.Sprintf("%d", reqTime))

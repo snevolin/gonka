@@ -19,10 +19,9 @@ import (
 )
 
 func TestChildEnvIncludesVersionLogPrefix(t *testing.T) {
-	env := childEnv("v0.2.11")
+	env := childEnv("0.2.13-v2-r2")
 	want := map[string]bool{
-		"DEVSHARD_LOG_PREFIX=v0.2.11":     false,
-		"DEVSHARD_BINARY_VERSION=v0.2.11": false,
+		"DEVSHARD_BINARY_LOG_VERSION=0.2.13-v2-r2": false,
 	}
 	for _, entry := range env {
 		if _, ok := want[entry]; ok {

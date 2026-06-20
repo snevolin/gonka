@@ -418,9 +418,9 @@ func NewGatewayStore(path string) (*GatewayStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate gateway disabled settings: %w", err)
 	}
-	if err := ensureGatewayDevshardsColumn(db, "protocol_version", "TEXT NOT NULL DEFAULT ''"); err != nil {
+	if err := ensureGatewayDevshardsColumn(db, "route_prefix", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("migrate gateway devshards: %w", err)
+		return nil, fmt.Errorf("migrate gateway devshards route prefix: %w", err)
 	}
 	if err := ensureGatewayDevshardsColumn(db, "rotation_role", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		db.Close()
@@ -594,7 +594,7 @@ func (s *GatewayStore) LoadState() (GatewayState, bool, error) {
 	state.Settings = state.Settings.WithTuningDefaults()
 
 	rows, err := s.db.Query(`
-		SELECT id, private_key_hex, private_key_env, model, storage_path, active, created_at, updated_at, protocol_version,
+		SELECT id, private_key_hex, private_key_env, model, storage_path, active, created_at, updated_at, route_prefix,
 		       rotation_role, rotation_epoch
 		FROM gateway_devshards
 		ORDER BY id`)
@@ -614,7 +614,7 @@ func (s *GatewayStore) LoadState() (GatewayState, bool, error) {
 			&active,
 			&devshard.CreatedAt,
 			&devshard.UpdatedAt,
-			&devshard.ProtocolVersion,
+			&devshard.RoutePrefix,
 			&devshard.RotationRole,
 			&devshard.RotationEpoch,
 		); err != nil {
@@ -966,7 +966,7 @@ func (s *GatewayStore) upsertDevshardTx(tx *sql.Tx, devshard GatewayDevshardStat
 	_ = tx.QueryRow(`SELECT created_at FROM gateway_devshards WHERE id = ?`, devshard.ID).Scan(&createdAt)
 	if _, err := tx.Exec(`
 		INSERT OR REPLACE INTO gateway_devshards (
-			id, private_key_hex, private_key_env, model, storage_path, active, created_at, updated_at, protocol_version,
+			id, private_key_hex, private_key_env, model, storage_path, active, created_at, updated_at, route_prefix,
 			rotation_role, rotation_epoch
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		strings.TrimSpace(devshard.ID),
@@ -977,7 +977,7 @@ func (s *GatewayStore) upsertDevshardTx(tx *sql.Tx, devshard GatewayDevshardStat
 		gatewayBoolToInt(devshard.Active),
 		createdAt,
 		now,
-		strings.TrimSpace(devshard.ProtocolVersion),
+		strings.TrimSpace(devshard.RoutePrefix),
 		strings.TrimSpace(devshard.RotationRole),
 		devshard.RotationEpoch,
 	); err != nil {

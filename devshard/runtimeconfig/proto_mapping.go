@@ -3,7 +3,7 @@ package runtimeconfig
 import (
 	"time"
 
-	"devshard/nodemanager/gen"
+	"common/nodemanager/gen"
 )
 
 // SnapshotFromProto maps nodemanager.RuntimeConfig to Snapshot.

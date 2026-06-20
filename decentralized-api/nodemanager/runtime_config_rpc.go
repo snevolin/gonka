@@ -2,7 +2,7 @@ package nodemanager
 
 import (
 	"decentralized-api/apiconfig"
-	"devshard/nodemanager/gen"
+	"common/nodemanager/gen"
 )
 
 func runtimeConfigFromSnapshot(snap apiconfig.RuntimeConfigSnapshot) *gen.RuntimeConfig {

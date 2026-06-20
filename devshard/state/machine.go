@@ -97,7 +97,6 @@ type StateMachine struct {
 	totalSlots         uint32
 
 	warmResolver    WarmKeyResolver       // optional, nil = no warm key support
-	protocolVersion types.ProtocolVersion // surfaced for gateway status/config compatibility
 }
 
 // SMOption configures optional StateMachine behavior.
@@ -125,25 +124,6 @@ func WithVersion(version string) SMOption {
 // state-root composition. This binary always returns true (sealed accumulator).
 func (sm *StateMachine) EffectiveV2Composition() bool {
 	return true
-}
-
-// WithProtocolVersion records the configured protocol version and enables
-// status/config reporting.
-func WithProtocolVersion(v types.ProtocolVersion) SMOption {
-	return func(sm *StateMachine) {
-		if v == "" {
-			v = types.ProtocolV1
-		}
-		sm.protocolVersion = v
-	}
-}
-
-// ProtocolVersion returns the configured protocol version.
-func (sm *StateMachine) ProtocolVersion() types.ProtocolVersion {
-	if sm.protocolVersion == "" {
-		return types.ProtocolV1
-	}
-	return sm.protocolVersion
 }
 
 func NewStateMachine(
@@ -211,7 +191,6 @@ func NewStateMachine(
 		committedEntries:   make(map[uint64][]byte),
 		sealedNonces:       make(map[uint64]uint64),
 		inferenceStore:     store,
-		protocolVersion:    types.ProtocolV1,
 	}
 	for _, o := range opts {
 		o(sm)
@@ -226,7 +205,6 @@ func NewStateMachine(
 		"token_price", config.TokenPrice,
 		"vote_threshold", config.VoteThreshold,
 		"user_address", userAddress,
-		"protocol_version", sm.ProtocolVersion(),
 	)
 
 	return sm, nil

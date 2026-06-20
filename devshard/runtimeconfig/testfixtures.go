@@ -3,7 +3,7 @@ package runtimeconfig
 import (
 	"time"
 
-	"devshard/nodemanager/gen"
+	"common/nodemanager/gen"
 )
 
 // TestRuntimeConfigProto builds a RuntimeConfig proto for server stubs.

@@ -48,8 +48,8 @@ func setupClientTestEnv(t *testing.T) (*HTTPClient, *httptest.Server, *signing.S
 	require.NoError(t, err)
 
 	e := echo.New()
-	g := e.Group("/v1/devshard")
-	srv.Register(g)
+	g := e.Group("/devshard/v2")
+	registerServer(g, srv)
 
 	ts := httptest.NewServer(e)
 	t.Cleanup(ts.Close)

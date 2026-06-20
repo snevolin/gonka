@@ -959,8 +959,19 @@ func (s *SQLite) DeleteSealedInferences(escrowID string) error {
 	if _, err := p.writeDB.Exec(`DELETE FROM sealed_inferences WHERE escrow_id = ?`, escrowID); err != nil {
 		return fmt.Errorf("delete sealed inferences: %w", err)
 	}
+	return nil
+}
+
+func (s *SQLite) ClearValidationObs(escrowID string) error {
+	p, _, err := s.poolFor(escrowID)
+	if err != nil {
+		return err
+	}
+	if _, err := p.writeDB.Exec(`DELETE FROM inference_validation_obs WHERE escrow_id = ?`, escrowID); err != nil {
+		return fmt.Errorf("clear inference validation obs: %w", err)
+	}
 	if _, err := p.writeDB.Exec(`DELETE FROM sealed_validation_obs WHERE escrow_id = ?`, escrowID); err != nil {
-		return fmt.Errorf("delete sealed validation obs: %w", err)
+		return fmt.Errorf("clear sealed validation obs: %w", err)
 	}
 	return nil
 }

@@ -12,7 +12,6 @@ import (
 	"devshard/state"
 	"devshard/storage"
 	"devshard/transport"
-	"devshard/types"
 )
 
 // HTTPSessionConfig holds the parameters needed to create an HTTP-backed user session.
@@ -22,9 +21,8 @@ type HTTPSessionConfig struct {
 	Bridge           bridge.MainnetBridge
 	StoragePath      string                          // SQLite path for session persistence; default ~/.cache/gonka/devshard-<escrowID>
 	StreamCallback   func(nonce uint64, line string) // optional: receives raw SSE data lines during inference
-	RoutePrefix      string                          // optional: HTTP path prefix used to reach hosts; default devshard.LegacyRoutePrefix. Versioned binaries use devshard.VersionedRoutePrefix(...).
+	RoutePrefix      string                          // HTTP path prefix used to reach hosts; default devshard.DefaultRoutePrefix()
 	RequestAdmission transport.RequestAdmissionController
-	ProtocolVersion  types.ProtocolVersion // optional: defaults to ProtocolV1
 }
 
 func resolveHTTPSessionStoragePath(escrowID, configured string) string {
@@ -48,18 +46,10 @@ func NewHTTPSession(cfg HTTPSessionConfig) (*Session, *state.StateMachine, error
 	}
 	verifier := signing.NewSecp256k1Verifier()
 
-	pv := cfg.ProtocolVersion
-	if pv == "" {
-		pv = types.ProtocolV1
-	}
-	routePrefix := devshardpkg.ResolveHostRoutePrefix(pv, cfg.RoutePrefix)
-	sessionVersion := devshardpkg.ProtocolSessionVersion(pv)
-	if cfg.ProtocolVersion == "" && cfg.RoutePrefix != "" {
-		var versionErr error
-		sessionVersion, versionErr = devshardpkg.VersionForRoutePrefix(cfg.RoutePrefix)
-		if versionErr != nil {
-			return nil, nil, fmt.Errorf("resolve route version: %w", versionErr)
-		}
+	routePrefix := devshardpkg.NormalizeRoutePrefix(cfg.RoutePrefix)
+	sessionVersion, err := devshardpkg.VersionForRoutePrefix(routePrefix)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve route version: %w", err)
 	}
 
 	group, err := bridge.BuildGroup(cfg.EscrowID, cfg.Bridge)
@@ -72,10 +62,7 @@ func NewHTTPSession(cfg HTTPSessionConfig) (*Session, *state.StateMachine, error
 		return nil, nil, fmt.Errorf("get escrow: %w", err)
 	}
 
-	config, err := sessionConfigAtBind(len(group), escrow, cfg.Bridge)
-	if err != nil {
-		return nil, nil, err
-	}
+	config := bridge.SessionConfigAtBind(len(group), escrow)
 
 	storagePath := resolveHTTPSessionStoragePath(cfg.EscrowID, cfg.StoragePath)
 	if err := os.MkdirAll(filepath.Dir(storagePath), 0755); err != nil {
@@ -103,13 +90,10 @@ func NewHTTPSession(cfg HTTPSessionConfig) (*Session, *state.StateMachine, error
 		var clientCfgs []transport.ClientConfig
 		if cfg.StreamCallback != nil || routePrefix != "" || cfg.RequestAdmission != nil {
 			cc := transport.DefaultClientConfig()
-			cc.ProtocolVersion = pv
 			if cfg.StreamCallback != nil {
 				cc.StreamCallback = cfg.StreamCallback
 			}
-			if routePrefix != "" {
-				cc.RoutePrefix = routePrefix
-			}
+			cc.RoutePrefix = routePrefix
 			if cfg.RequestAdmission != nil {
 				cc.ParticipantKey = slot.ValidatorAddress
 				cc.Admission = cfg.RequestAdmission
@@ -126,7 +110,6 @@ func NewHTTPSession(cfg HTTPSessionConfig) (*Session, *state.StateMachine, error
 	if metaErr == nil {
 		session, recSM, recErr := RecoverSession(sqlStore, signer, verifier, cfg.EscrowID, sessionVersion, group, clients,
 			state.WithWarmKeyResolver(cfg.Bridge.VerifyWarmKey),
-			state.WithProtocolVersion(pv),
 		)
 		if recErr != nil {
 			sqlStore.Close()
@@ -155,8 +138,7 @@ func NewHTTPSession(cfg HTTPSessionConfig) (*Session, *state.StateMachine, error
 
 	sm, err := state.NewStateMachine(cfg.EscrowID, config, group, escrow.Amount, escrow.CreatorAddress, verifier, sqlStore,
 		state.WithWarmKeyResolver(cfg.Bridge.VerifyWarmKey),
-		state.WithVersion(types.EffectiveStateRootAndProtocolVersion),
-		state.WithProtocolVersion(pv),
+		state.WithVersion(sessionVersion),
 	)
 	if err != nil {
 		sqlStore.Close()

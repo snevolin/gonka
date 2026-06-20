@@ -166,14 +166,11 @@ jobs:
           USE_REGISTRY_CACHE: "1"
         run: |
           make build-docker
-          # devshardd self-checks build_version == the version versiond forces (dev via build/devshard-version).
+          # devshardd checks DEVSHARD_BINARY_LOG_VERSION == link-time protocol name (dev via build/devshard-version).
           DEVSHARD_VERSION=dev make devshardd-build
-          echo "=== devshard version (make DEVSHARD_VERSION / build/devshard-version) ==="
+          echo "=== devshard version (DEVSHARD_VERSION / build/devshard-version) ==="
           make -s print-devshard-version
           cat build/devshard-version
-          echo "=== devshard protocol version (DEVSHARD_PROTOCOL_VERSION / build/devshard-protocol-version) ==="
-          make -s print-devshard-protocol-version
-          cat build/devshard-protocol-version
           echo "=== Images immediately after build ==="
           docker images | head -20
 
@@ -204,7 +201,6 @@ jobs:
           path: |
             build/devshardd
             build/devshard-version
-            build/devshard-protocol-version
           retention-days: 1
 
       - name: Make Upgrade Build
@@ -272,7 +268,6 @@ jobs:
           chmod +x build/devshardd
           echo "=== devshard version stamp (for Testermint) ==="
           cat build/devshard-version 2>/dev/null || echo "(missing build/devshard-version)"
-          cat build/devshard-protocol-version 2>/dev/null || echo "(missing build/devshard-protocol-version)"
 
       - name: Install Make
         run: |

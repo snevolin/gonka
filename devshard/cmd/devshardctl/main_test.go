@@ -49,12 +49,12 @@ func TestBuildGatewayRuntimesDeactivatesMissingEscrow(t *testing.T) {
 	require.True(t, ok)
 
 	savedBuilder := gatewayRuntimeBuilder
-	gatewayRuntimeBuilder = func(cfg RuntimeConfig, chainREST, defaultModel string, perf *PerfTracker) (*devshardRuntime, error) {
+	gatewayRuntimeBuilder = func(cfg RuntimeConfig, deps runtimeBuildDeps) (*devshardRuntime, error) {
 		switch cfg.ID {
 		case "12":
 			return nil, fmt.Errorf("runtime %s: create session: build group: get escrow: %w", cfg.ID, bridge.ErrEscrowNotFound)
 		case "24":
-			return &devshardRuntime{id: cfg.ID, model: defaultModel}, nil
+			return &devshardRuntime{id: cfg.ID, model: deps.defaultModel}, nil
 		default:
 			return nil, fmt.Errorf("unexpected runtime id %s", cfg.ID)
 		}
@@ -101,12 +101,12 @@ func TestBuildGatewayRuntimesDeactivatesMissingPrivateKey(t *testing.T) {
 	require.True(t, ok)
 
 	savedBuilder := gatewayRuntimeBuilder
-	gatewayRuntimeBuilder = func(cfg RuntimeConfig, chainREST, defaultModel string, perf *PerfTracker) (*devshardRuntime, error) {
+	gatewayRuntimeBuilder = func(cfg RuntimeConfig, deps runtimeBuildDeps) (*devshardRuntime, error) {
 		switch cfg.ID {
 		case "12":
 			return nil, fmt.Errorf("runtime %s: %w", cfg.ID, errRuntimePrivateKeyMissing)
 		case "24":
-			return &devshardRuntime{id: cfg.ID, model: defaultModel}, nil
+			return &devshardRuntime{id: cfg.ID, model: deps.defaultModel}, nil
 		default:
 			return nil, fmt.Errorf("unexpected runtime id %s", cfg.ID)
 		}
@@ -152,7 +152,7 @@ func TestBuildGatewayRuntimesPreservesActiveOnOtherErrors(t *testing.T) {
 	require.True(t, ok)
 
 	savedBuilder := gatewayRuntimeBuilder
-	gatewayRuntimeBuilder = func(cfg RuntimeConfig, chainREST, defaultModel string, perf *PerfTracker) (*devshardRuntime, error) {
+	gatewayRuntimeBuilder = func(cfg RuntimeConfig, deps runtimeBuildDeps) (*devshardRuntime, error) {
 		return nil, fmt.Errorf("runtime %s: create session: dial tcp timeout", cfg.ID)
 	}
 	t.Cleanup(func() {

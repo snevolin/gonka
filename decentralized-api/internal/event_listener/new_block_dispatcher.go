@@ -18,7 +18,7 @@ import (
 	"decentralized-api/internal/event_listener/chainevents"
 	"decentralized-api/internal/seed"
 	"decentralized-api/internal/validation"
-	"decentralized-api/logging"
+	"common/logging"
 
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	"github.com/productscience/inference/x/inference/types"

@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -72,6 +74,10 @@ func (r *recordingStorage) DeleteSealedInferences(escrowID string) error {
 	r.lastMethod = "DeleteSealedInferences"
 	return nil
 }
+func (r *recordingStorage) ClearValidationObs(escrowID string) error {
+	r.lastMethod = "ClearValidationObs"
+	return nil
+}
 func (r *recordingStorage) RecordValidationsAppliedOnce(escrowID string, entries []ValidationObsEntry) error {
 	r.lastMethod = "RecordValidationsAppliedOnce"
 	return nil
@@ -86,6 +92,18 @@ func (r *recordingStorage) GetValidationObservability(escrowID string) ([]SlotVa
 }
 func (r *recordingStorage) PruneEpoch(epochID uint64) error {
 	r.lastMethod = "PruneEpoch"
+	return nil
+}
+func (r *recordingStorage) Acquire(context.Context, string, uint64, uint64, string) (bool, error) {
+	r.lastMethod = "Acquire"
+	return false, nil
+}
+func (r *recordingStorage) AcquireOneStale(context.Context, string, string, time.Duration) (uint64, uint64, error) {
+	r.lastMethod = "AcquireOneStale"
+	return 0, 0, nil
+}
+func (r *recordingStorage) SetResult(context.Context, string, uint64, LeaseStatus) error {
+	r.lastMethod = "SetResult"
 	return nil
 }
 func (r *recordingStorage) pruneBefore(cutoff uint64) error {

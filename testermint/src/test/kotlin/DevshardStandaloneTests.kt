@@ -33,8 +33,6 @@ import kotlin.test.assertNotNull
  *    devshardctl builds host URLs as proxy/devshard/<version>/sessions/:id/...
  *    nginx strips /devshard/, versiond strips /<version>/, devshardd handles
  *    /sessions/:id/...
- *  - DAPI's in-process HostManager is still mounted on /v1/devshard for the
- *    legacy path; the new test does not exercise it.
  *  - This file also contains a startup-seeded state-driven test for the normal
  *    `approved_versions -> /versions -> versiond download` path without local
  *    overrides for the tested version.

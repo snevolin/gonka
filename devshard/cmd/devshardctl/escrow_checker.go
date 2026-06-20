@@ -46,7 +46,7 @@ func (ec *EscrowChecker) triggerCheck(escrowID string, deactivate func()) {
 		ec.mu.Unlock()
 	}()
 
-	br := newRESTBridgeForProtocol(ec.chainREST(), "")
+	br := bridge.NewRESTBridge(ec.chainREST())
 	_, err := br.GetEscrow(escrowID)
 	if err != nil {
 		if errors.Is(err, bridge.ErrEscrowNotFound) {

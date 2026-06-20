@@ -493,7 +493,7 @@ data class ApplicationAPI(
 
     fun getDevshardMempool(escrowId: Long): DevshardMempoolResponse = wrapLog("GetDevshardMempool", false) {
         val url = urlFor(SERVER_TYPE_PUBLIC)
-        val resp = Fuel.get("$url/v1/devshard/sessions/$escrowId/mempool")
+        val resp = Fuel.get("$url${defaultDevshardRoutePrefix()}/sessions/$escrowId/mempool")
             .timeoutRead(1000 * 30)
             .responseObject<DevshardMempoolResponse>(gsonDeserializer(cosmosJson))
         logResponse(resp)

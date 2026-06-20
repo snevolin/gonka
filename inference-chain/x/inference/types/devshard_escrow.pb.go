@@ -37,6 +37,8 @@ type DevshardEscrow struct {
 	InferenceSealGraceNonces  uint32   `protobuf:"varint,12,opt,name=inference_seal_grace_nonces,json=inferenceSealGraceNonces,proto3" json:"inference_seal_grace_nonces,omitempty"`
 	InferenceSealGraceSeconds uint32   `protobuf:"varint,13,opt,name=inference_seal_grace_seconds,json=inferenceSealGraceSeconds,proto3" json:"inference_seal_grace_seconds,omitempty"`
 	AutoSealEveryNNonces      uint32   `protobuf:"varint,14,opt,name=auto_seal_every_n_nonces,json=autoSealEveryNNonces,proto3" json:"auto_seal_every_n_nonces,omitempty"`
+	ValidationRate            uint32   `protobuf:"varint,15,opt,name=validation_rate,json=validationRate,proto3" json:"validation_rate,omitempty"`
+	VoteThresholdFactor       uint32   `protobuf:"varint,16,opt,name=vote_threshold_factor,json=voteThresholdFactor,proto3" json:"vote_threshold_factor,omitempty"`
 }
 
 func (m *DevshardEscrow) Reset()         { *m = DevshardEscrow{} }
@@ -166,6 +168,20 @@ func (m *DevshardEscrow) GetInferenceSealGraceSeconds() uint32 {
 func (m *DevshardEscrow) GetAutoSealEveryNNonces() uint32 {
 	if m != nil {
 		return m.AutoSealEveryNNonces
+	}
+	return 0
+}
+
+func (m *DevshardEscrow) GetValidationRate() uint32 {
+	if m != nil {
+		return m.ValidationRate
+	}
+	return 0
+}
+
+func (m *DevshardEscrow) GetVoteThresholdFactor() uint32 {
+	if m != nil {
+		return m.VoteThresholdFactor
 	}
 	return 0
 }
@@ -482,6 +498,18 @@ func (m *DevshardEscrow) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.VoteThresholdFactor != 0 {
+		i = encodeVarintDevshardEscrow(dAtA, i, uint64(m.VoteThresholdFactor))
+		i--
+		dAtA[i] = 0x1
+		i--
+		dAtA[i] = 0x80
+	}
+	if m.ValidationRate != 0 {
+		i = encodeVarintDevshardEscrow(dAtA, i, uint64(m.ValidationRate))
+		i--
+		dAtA[i] = 0x78
+	}
 	if m.AutoSealEveryNNonces != 0 {
 		i = encodeVarintDevshardEscrow(dAtA, i, uint64(m.AutoSealEveryNNonces))
 		i--
@@ -784,6 +812,12 @@ func (m *DevshardEscrow) Size() (n int) {
 	}
 	if m.InferenceSealGraceSeconds != 0 {
 		n += 1 + sovDevshardEscrow(uint64(m.InferenceSealGraceSeconds))
+	}
+	if m.VoteThresholdFactor != 0 {
+		n += 2 + sovDevshardEscrow(uint64(m.VoteThresholdFactor))
+	}
+	if m.ValidationRate != 0 {
+		n += 1 + sovDevshardEscrow(uint64(m.ValidationRate))
 	}
 	if m.AutoSealEveryNNonces != 0 {
 		n += 1 + sovDevshardEscrow(uint64(m.AutoSealEveryNNonces))
@@ -1218,6 +1252,44 @@ func (m *DevshardEscrow) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.AutoSealEveryNNonces |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 15:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ValidationRate", wireType)
+			}
+			m.ValidationRate = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowDevshardEscrow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ValidationRate |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 16:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field VoteThresholdFactor", wireType)
+			}
+			m.VoteThresholdFactor = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowDevshardEscrow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.VoteThresholdFactor |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

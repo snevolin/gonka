@@ -22,6 +22,7 @@ import (
 
 	devshardpkg "devshard"
 	"devshard/bridge"
+	"devshard/runtimeparams"
 	"devshard/storage"
 	"devshard/transport"
 	"devshard/types"
@@ -29,12 +30,12 @@ import (
 )
 
 type RuntimeConfig struct {
-	ID              string `json:"id"`
-	PrivateKeyHex   string `json:"private_key,omitempty"`
-	PrivateKeyEnv   string `json:"private_key_env,omitempty"`
-	Model           string `json:"model,omitempty"`
-	StoragePath     string `json:"storage_path,omitempty"`
-	ProtocolVersion string `json:"protocol_version,omitempty"`
+	ID            string `json:"id"`
+	PrivateKeyHex string `json:"private_key,omitempty"`
+	PrivateKeyEnv string `json:"private_key_env,omitempty"`
+	Model         string `json:"model,omitempty"`
+	StoragePath   string `json:"storage_path,omitempty"`
+	RoutePrefix   string `json:"route_prefix,omitempty"`
 }
 
 type Gateway struct {
@@ -56,6 +57,8 @@ type Gateway struct {
 	rotatorStop           chan struct{}
 	rotatorDone           chan struct{}
 	rotationFailures      map[string]struct{}
+	runtimeParams         *runtimeparams.Managed
+	runtimeParamsClose    func()
 	finalizeMu            sync.Mutex
 	settlementMu          sync.Mutex
 	settlementInFlight    map[string]struct{}
@@ -93,7 +96,7 @@ type runtimeStatus struct {
 	Phase                string `json:"phase,omitempty"`
 	Nonce                uint64 `json:"nonce,omitempty"`
 	Balance              uint64 `json:"balance,omitempty"`
-	ProtocolVersion      string `json:"protocol_version,omitempty"`
+	SessionVersion       string `json:"session_version,omitempty"`
 	ActiveRequests       int64  `json:"active_requests"`
 	ReservedTokens       int64  `json:"reserved_tokens"`
 	ChainPhase           string `json:"chain_phase,omitempty"`
@@ -214,7 +217,10 @@ func newRuntimeMux(proxy *Proxy) http.Handler {
 	return mux
 }
 
-func buildRuntime(cfg RuntimeConfig, chainREST, defaultModel string, perf *PerfTracker) (*devshardRuntime, error) {
+func buildRuntime(cfg RuntimeConfig, deps runtimeBuildDeps) (*devshardRuntime, error) {
+	if err := deps.validate(); err != nil {
+		return nil, err
+	}
 	legacyStoragePath := strings.TrimSpace(cfg.StoragePath)
 	keyHex := strings.TrimSpace(cfg.PrivateKeyHex)
 	if keyHex == "" && cfg.PrivateKeyEnv != "" {
@@ -226,7 +232,7 @@ func buildRuntime(cfg RuntimeConfig, chainREST, defaultModel string, perf *PerfT
 
 	model := cfg.Model
 	if model == "" {
-		model = defaultModel
+		model = deps.defaultModel
 	}
 
 	cfg.StoragePath = normalizeStorageDir(cfg.StoragePath)
@@ -234,20 +240,16 @@ func buildRuntime(cfg RuntimeConfig, chainREST, defaultModel string, perf *PerfT
 		return nil, fmt.Errorf("runtime %s: create storage dir: %w", cfg.ID, err)
 	}
 
+	perf := deps.perf
 	if perf == nil {
 		perf = NewPerfTracker(nil)
 	}
 
-	pv, pvErr := types.ParseProtocolVersion(cfg.ProtocolVersion)
-	if pvErr != nil {
-		return nil, fmt.Errorf("runtime %s: %w", cfg.ID, pvErr)
-	}
-
-	br := newRESTBridgeForProtocol(chainREST, pv)
+	br := bridge.NewRESTBridge(deps.chainREST)
 	if err := migrateGatewayLegacyStorage(cfg.StoragePath, legacyStoragePath, cfg.ID, br); err != nil {
 		return nil, fmt.Errorf("runtime %s: migrate legacy storage: %w", cfg.ID, err)
 	}
-	routePrefix := devshardpkg.ResolveHostRoutePrefix(pv, os.Getenv("DEVSHARD_ROUTE_PREFIX"))
+	routePrefix := resolveRuntimeRoutePrefix(cfg.RoutePrefix)
 	session, sm, err := user.NewHTTPSession(user.HTTPSessionConfig{
 		PrivateKeyHex:    keyHex,
 		EscrowID:         cfg.ID,
@@ -255,7 +257,6 @@ func buildRuntime(cfg RuntimeConfig, chainREST, defaultModel string, perf *PerfT
 		StoragePath:      cfg.StoragePath,
 		RoutePrefix:      routePrefix,
 		RequestAdmission: sharedParticipantRequestLimiter,
-		ProtocolVersion:  pv,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runtime %s: create session: %w", cfg.ID, err)
@@ -295,8 +296,28 @@ func buildRuntime(cfg RuntimeConfig, chainREST, defaultModel string, perf *PerfT
 	return rt, nil
 }
 
-func newRESTBridgeForProtocol(chainREST string, pv types.ProtocolVersion) *bridge.RESTBridge {
-	return bridge.NewRESTBridge(chainREST)
+// runtimeBuildDeps returns gateway build dependencies. Caller must hold g.mu when
+// reading live settings from an active Gateway.
+func (g *Gateway) runtimeBuildDeps(perf *PerfTracker) runtimeBuildDeps {
+	return g.runtimeBuildDepsFromSettings(perf, g.settings)
+}
+
+func (g *Gateway) runtimeBuildDepsFromSettings(perf *PerfTracker, settings GatewaySettings) runtimeBuildDeps {
+	return runtimeBuildDeps{
+		chainREST:    firstNonEmpty(settings.ChainREST, g.settings.ChainREST),
+		defaultModel: firstNonEmpty(settings.DefaultModel, g.settings.DefaultModel),
+		perf:         perf,
+	}
+}
+
+func resolveRuntimeRoutePrefix(configured string) string {
+	if routePrefix := strings.TrimSpace(configured); routePrefix != "" {
+		return devshardpkg.NormalizeRoutePrefix(routePrefix)
+	}
+	if routePrefix := strings.TrimSpace(os.Getenv("DEVSHARD_ROUTE_PREFIX")); routePrefix != "" {
+		return devshardpkg.NormalizeRoutePrefix(routePrefix)
+	}
+	return devshardpkg.DefaultRoutePrefix()
 }
 
 // hostSlotCounts builds a slot-count map from a per-slot participant
@@ -389,7 +410,7 @@ func (rt *devshardRuntime) snapshot() runtimeStatus {
 		st := rt.proxy.sm.SnapshotState()
 		status.Nonce = rt.proxy.session.Nonce()
 		status.Balance = st.Balance
-		status.ProtocolVersion = string(rt.proxy.sm.ProtocolVersion())
+		status.SessionVersion = st.StateRootAndProtocolVersion
 	}
 	if rt.proxy != nil && rt.proxy.phaseGate != nil {
 		snapshot := rt.proxy.phaseGate.Snapshot()
@@ -970,6 +991,9 @@ func (g *Gateway) capacityStatus(models []string, runtimeStatuses map[string]gat
 
 func (g *Gateway) Close() error {
 	var firstErr error
+	if g.runtimeParamsClose != nil {
+		g.runtimeParamsClose()
+	}
 	if g.phaseGate != nil {
 		g.phaseGate.Stop()
 	}
@@ -1858,7 +1882,7 @@ type adminDevshardRequest struct {
 	PrivateKeyEnv   string `json:"private_key_env,omitempty"`
 	Model           string `json:"model,omitempty"`
 	StoragePath     string `json:"storage_path,omitempty"`
-	ProtocolVersion string `json:"protocol_version,omitempty"`
+	RoutePrefix   string `json:"route_prefix,omitempty"`
 }
 
 type adminImportDevshardRequest struct {
@@ -1874,7 +1898,7 @@ type adminCreateEscrowRequest struct {
 	ModelID         string `json:"model_id,omitempty"`
 	Register        *bool  `json:"register,omitempty"`
 	StoragePath     string `json:"storage_path,omitempty"`
-	ProtocolVersion string `json:"protocol_version,omitempty"`
+	RoutePrefix     string `json:"route_prefix,omitempty"`
 	ChainID         string `json:"chain_id,omitempty"`
 	FeeDenom        string `json:"fee_denom,omitempty"`
 	FeeAmount       uint64 `json:"fee_amount,omitempty"`
@@ -2532,7 +2556,7 @@ func (g *Gateway) handleAdminEscrows(w http.ResponseWriter, r *http.Request) {
 			ID:              strconv.FormatUint(result.EscrowID, 10),
 			Model:           modelID,
 			StoragePath:     strings.TrimSpace(req.StoragePath),
-			ProtocolVersion: strings.TrimSpace(req.ProtocolVersion),
+			RoutePrefix:   strings.TrimSpace(req.RoutePrefix),
 		},
 		Active: true,
 	}
@@ -2596,7 +2620,7 @@ func (g *Gateway) addCreatedEscrowRuntime(record GatewayDevshardState) (GatewayD
 	} else {
 		record.StoragePath = normalizeStorageDir(record.StoragePath)
 	}
-	rt, err := gatewayRuntimeBuilder(record.RuntimeConfig, state.Settings.ChainREST, state.Settings.DefaultModel, g.perf)
+	rt, err := gatewayRuntimeBuilder(record.RuntimeConfig, g.runtimeBuildDepsFromSettings(g.perf, state.Settings))
 	if err != nil {
 		return record, err
 	}
@@ -2844,14 +2868,14 @@ func (g *Gateway) handleAdminImportDevshard(w http.ResponseWriter, r *http.Reque
 			PrivateKeyEnv:   strings.TrimSpace(req.PrivateKeyEnv),
 			Model:           strings.TrimSpace(req.Model),
 			StoragePath:     req.StoragePath,
-			ProtocolVersion: strings.TrimSpace(req.ProtocolVersion),
+			RoutePrefix:   strings.TrimSpace(req.RoutePrefix),
 		},
 		Active: active,
 	}
 	if record.Model == "" {
 		record.Model = state.Settings.DefaultModel
 	}
-	rt, err := gatewayRuntimeBuilder(record.RuntimeConfig, state.Settings.ChainREST, state.Settings.DefaultModel, g.perf)
+	rt, err := gatewayRuntimeBuilder(record.RuntimeConfig, g.runtimeBuildDepsFromSettings(g.perf, state.Settings))
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"message":%q}}`, err.Error()), http.StatusBadRequest)
 		return
@@ -2953,8 +2977,8 @@ func (g *Gateway) handleAdminAddDevshard(w http.ResponseWriter, r *http.Request)
 		if strings.TrimSpace(req.StoragePath) != "" {
 			record.StoragePath = normalizeStorageDir(req.StoragePath)
 		}
-		if strings.TrimSpace(req.ProtocolVersion) != "" {
-			record.ProtocolVersion = strings.TrimSpace(req.ProtocolVersion)
+		if strings.TrimSpace(req.RoutePrefix) != "" {
+			record.RoutePrefix = strings.TrimSpace(req.RoutePrefix)
 		}
 		record.Active = true
 	} else {
@@ -2970,7 +2994,7 @@ func (g *Gateway) handleAdminAddDevshard(w http.ResponseWriter, r *http.Request)
 				PrivateKeyEnv:   strings.TrimSpace(req.PrivateKeyEnv),
 				Model:           strings.TrimSpace(req.Model),
 				StoragePath:     normalizeStorageDir(req.StoragePath),
-				ProtocolVersion: strings.TrimSpace(req.ProtocolVersion),
+				RoutePrefix:   strings.TrimSpace(req.RoutePrefix),
 			},
 			Active: true,
 		}
@@ -3004,7 +3028,7 @@ func (g *Gateway) handleAdminAddDevshard(w http.ResponseWriter, r *http.Request)
 		record.StoragePath = normalizeStorageDir(record.StoragePath)
 	}
 
-	rt, err := gatewayRuntimeBuilder(record.RuntimeConfig, state.Settings.ChainREST, state.Settings.DefaultModel, g.perf)
+	rt, err := gatewayRuntimeBuilder(record.RuntimeConfig, g.runtimeBuildDepsFromSettings(g.perf, state.Settings))
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"message":%q}}`, err.Error()), http.StatusBadRequest)
 		return
@@ -3407,18 +3431,22 @@ func finalizeRuntimeConfigs(runtimes []RuntimeConfig, defaultModel, baseStorageD
 	return out, nil
 }
 
-func buildRuntimes(configs []RuntimeConfig, chainREST, defaultModel string) ([]*devshardRuntime, error) {
+func buildRuntimes(configs []RuntimeConfig, deps runtimeBuildDeps) ([]*devshardRuntime, error) {
 	type result struct {
 		idx int
 		rt  *devshardRuntime
 		err error
 	}
 	t0 := time.Now()
-	perf := NewPerfTracker(nil)
+	perf := deps.perf
+	if perf == nil {
+		perf = NewPerfTracker(nil)
+	}
+	deps.perf = perf
 	ch := make(chan result, len(configs))
 	for i, cfg := range configs {
 		go func(idx int, cfg RuntimeConfig) {
-			rt, err := buildRuntime(cfg, chainREST, defaultModel, perf)
+			rt, err := buildRuntime(cfg, deps)
 			ch <- result{idx, rt, err}
 		}(i, cfg)
 	}

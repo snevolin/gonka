@@ -6,7 +6,7 @@ import (
 	"time"
 
 	devshardpkg "devshard"
-	"devshard/nodemanager/gen"
+	"common/nodemanager/gen"
 )
 
 const defaultLogprobsMode = "processed"

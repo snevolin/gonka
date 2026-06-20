@@ -96,11 +96,12 @@ type Host struct {
 	signer       signing.Signer
 	verifier     signing.Verifier
 	engine       devshard.InferenceEngine
-	validator    devshard.ValidationEngine // optional, nil = no validation
-	escrowID     string
-	epochID      uint64
-	slotIDs      map[uint32]bool
-	group        []types.SlotAssignment
+	validator          devshard.ValidationEngine // optional, nil = no validation
+	validationRecorder devshard.ValidationCompletionRecorder
+	escrowID           string
+	epochID            uint64
+	slotIDs            map[uint32]bool
+	group              []types.SlotAssignment
 	mempool      *Mempool
 	checker      AcceptanceChecker
 	store        storage.Storage // optional, nil = no persistence
@@ -121,13 +122,7 @@ type Host struct {
 	completedResponses map[uint64][]byte // inference ID -> cached ML response body
 	ownSeed            int64             // deterministic seed derived from signer + escrowID
 
-	// Payload prune tracking. These fields are host-local off-state and must
-	// NOT participate in the state root or snapshot. The deterministic seal now
-	// lives in the state machine (autoSealLocked); the host only emits a
-	// payload-prune event for each inference that the applied diff sealed.
-	pruneSink   PruneEventSink
-	prunedFired map[uint64]struct{}       // inference IDs we've already emitted a prune for
-	maxNonce    devshard.MaxNonceProvider // nil = do not enforce
+	maxNonce devshard.MaxNonceProvider // nil = do not enforce
 }
 
 // SnapshotInterval controls how often hosts persist full state snapshots.
@@ -208,7 +203,6 @@ func NewHost(
 		validating:            make(map[uint64]struct{}),
 		completedResponses:    make(map[uint64][]byte),
 		ownSeed:               ownSeed,
-		prunedFired:           make(map[uint64]struct{}),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -254,6 +248,12 @@ func WithValidator(v devshard.ValidationEngine) HostOption {
 	return func(h *Host) { h.validator = v }
 }
 
+// WithValidationCompletionRecorder sets the recorder called after MsgValidation
+// is successfully queued by the async validation path.
+func WithValidationCompletionRecorder(r devshard.ValidationCompletionRecorder) HostOption {
+	return func(h *Host) { h.validationRecorder = r }
+}
+
 func WithAvailabilityProvider(p devshard.AvailabilityProvider) HostOption {
 	return func(h *Host) { h.availability = p }
 }
@@ -276,14 +276,6 @@ func WithGrace(grace uint64) HostOption {
 			h.checker = sc
 		}
 	}
-}
-
-// WithPruneSink installs a sink that receives InferencePruneEvent emissions
-// after each applied diff. Tier A (terminal-status) and Tier C (stale Finished)
-// events both flow through this hook. Default is nil, in which case the host
-// emits nothing and behaves exactly as before.
-func WithPruneSink(s PruneEventSink) HostOption {
-	return func(h *Host) { h.pruneSink = s }
 }
 
 func (h *Host) StateRoot() ([]byte, error) {
@@ -521,13 +513,6 @@ func (h *Host) applyAndPersist(diff types.Diff) error {
 	if h.store != nil {
 		warmBefore = h.sm.WarmKeys()
 	}
-	// Capture the live inference ids before applying so we can detect which
-	// ones the deterministic seal (state machine autoSeal) folds out of live
-	// state during this diff. Only needed when a prune sink is wired.
-	var liveBefore map[uint64]struct{}
-	if h.pruneSink != nil {
-		liveBefore = h.sm.LiveInferenceIDs()
-	}
 	root, err := h.sm.ApplyDiff(diff)
 	if err != nil {
 		return fmt.Errorf("apply diff nonce %d: %w", diff.Nonce, err)
@@ -542,15 +527,6 @@ func (h *Host) applyAndPersist(diff types.Diff) error {
 		if ti := tx.GetTimeoutInference(); ti != nil {
 			delete(h.completedResponses, ti.InferenceId)
 		}
-	}
-
-	// Emit one payload-prune event per inference this diff sealed. The seal is
-	// the deterministic state-machine fold; here we only react to it. Pruning
-	// is host-local off-state, carries no clock, and never mutates the root.
-	// Restricted to seals that happened in the Active phase (autoSeal); the
-	// settlement drain tears the whole session down and is handled elsewhere.
-	if h.pruneSink != nil && phaseBefore == types.PhaseActive {
-		h.emitSealPrunesLocked(liveBefore)
 	}
 
 	if h.store != nil {
@@ -570,42 +546,6 @@ func (h *Host) applyAndPersist(diff types.Diff) error {
 		h.maybeSaveSnapshotLocked(diff.Nonce, shouldSnapshot, settledNow)
 	}
 	return nil
-}
-
-// emitSealPrunesLocked dispatches one payload-prune event per inference that
-// the just-applied diff sealed: an id that was live before the apply and is no
-// longer live afterwards (the state machine's deterministic autoSeal folded it
-// into SealedAcc). Pruning is host-local off-state -- it carries no clock and
-// never mutates the root, so it cannot diverge state. The PayloadEpoch carries
-// h.epochID (the only epoch the executor stored under for this session, set via
-// WithEpochID). Dedupe via prunedFired tolerates the same id appearing twice.
-// Caller must hold h.mu and must have verified h.pruneSink is non-nil.
-func (h *Host) emitSealPrunesLocked(liveBefore map[uint64]struct{}) {
-	if len(liveBefore) == 0 {
-		return
-	}
-	for id := range liveBefore {
-		if _, stillLive := h.sm.GetInference(id); stillLive {
-			continue
-		}
-		if _, fired := h.prunedFired[id]; fired {
-			continue
-		}
-		// Label terminal vs stale-finished from the sealed snapshot (metrics
-		// only). Fall back to terminal if the obs lookup is unavailable.
-		reason := PruneReasonTerminal
-		if rec, ok := h.sm.LookupSealedInference(id); ok && !isTerminalStatus(rec.Status) {
-			reason = PruneReasonStaleFinished
-		}
-		h.prunedFired[id] = struct{}{}
-		h.pruneSink.OnInferencePrunable(InferencePruneEvent{
-			EscrowID:          h.escrowID,
-			InferenceID:       id,
-			Reason:            reason,
-			PayloadEpoch:      h.epochID,
-			PayloadEpochKnown: h.epochID != 0,
-		})
-	}
 }
 
 // maybeSaveSnapshotLocked copies the current state when shouldSnapshot is true.
@@ -1194,6 +1134,12 @@ func (h *Host) validateAsync(ctx context.Context, job validateJob) {
 	}
 	fields = append(fields, result.Details...)
 	observability.Log(ctx, observability.LevelInfo, "validation tx published", observability.StageVotePublished, observability.WhereHostPublishValidation, h.escrowID, observability.ReasonOK, nil, fields...)
+
+	if h.validationRecorder != nil {
+		if err := h.validationRecorder.MarkValidationSubmitted(ctx, h.escrowID, job.inferenceID); err != nil {
+			logging.Error("mark validation submitted failed", "subsystem", "host", "inference_id", job.inferenceID, "error", err)
+		}
+	}
 }
 
 func validationResultLabel(valid bool) string {

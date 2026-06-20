@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"devshard/nodemanager/gen"
+	"common/nodemanager/gen"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"

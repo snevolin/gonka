@@ -343,8 +343,11 @@ func mustBuildGateway(gatewayStore *GatewayStore, gatewayState GatewayState, bas
 	}
 	perf := NewPerfTracker(perfStore)
 
+	runtimeParams, runtimeParamsClose := mustInitGatewayRuntimeParams(context.Background(), gatewayState.Settings.ChainREST)
+
 	runtimes, err := buildGatewayRuntimes(gatewayStore, &gatewayState, baseStorageDir, perf)
 	if err != nil {
+		runtimeParamsClose()
 		perfStore.Close()
 		log.Fatalf("create runtimes: %v", err)
 	}
@@ -359,6 +362,8 @@ func mustBuildGateway(gatewayStore *GatewayStore, gatewayState GatewayState, bas
 	)
 	gateway := NewManagedGateway(runtimes, limiter, gatewayState.Settings, baseStorageDir, gatewayStore, perf)
 	gateway.perfStore = perfStore
+	gateway.runtimeParams = runtimeParams
+	gateway.runtimeParamsClose = runtimeParamsClose
 	return gateway
 }
 
@@ -391,9 +396,14 @@ func buildGatewayRuntimes(gatewayStore *GatewayStore, gatewayState *GatewayState
 	}
 	t0 := time.Now()
 	ch := make(chan buildResult, len(allCfgs))
+	deps := runtimeBuildDeps{
+		chainREST:    gatewayState.Settings.ChainREST,
+		defaultModel: gatewayState.Settings.DefaultModel,
+		perf:         perf,
+	}
 	for i, cfg := range allCfgs {
 		go func(idx int, cfg RuntimeConfig) {
-			rt, err := gatewayRuntimeBuilder(cfg, gatewayState.Settings.ChainREST, gatewayState.Settings.DefaultModel, perf)
+			rt, err := gatewayRuntimeBuilder(cfg, deps)
 			ch <- buildResult{idx, rt, err}
 		}(i, cfg)
 	}

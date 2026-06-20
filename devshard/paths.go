@@ -7,17 +7,18 @@ import (
 	"devshard/types"
 )
 
-const (
-	LegacyRoutePrefix = "/v1/devshard"
-)
-
 func VersionedRoutePrefix(version string) string {
 	return "/devshard/" + version
 }
 
+// DefaultRoutePrefix is the HTTP mount used when no explicit route prefix is set.
+func DefaultRoutePrefix() string {
+	return VersionedRoutePrefix(types.EffectiveStateRootAndProtocolVersion)
+}
+
 func NormalizeRoutePrefix(routePrefix string) string {
-	if routePrefix == "" {
-		return LegacyRoutePrefix
+	if strings.TrimSpace(routePrefix) == "" {
+		return DefaultRoutePrefix()
 	}
 	return routePrefix
 }
@@ -29,52 +30,15 @@ func ResolveVersionedRoutePrefix(version, routePrefix string) string {
 	return VersionedRoutePrefix(version)
 }
 
-// VersionForRoutePrefix maps an HTTP route prefix to the version tag used when
-// creating a user-side session (state machine + optional SQLite row). This is
-// not the same as the URL path alone:
+// VersionForRoutePrefix maps an HTTP route prefix to the session bind tag used when
+// creating a user-side session (state machine + optional SQLite row).
 //
-//   - LegacyRoutePrefix (/v1/devshard): session tag is types.LegacyRouteSessionVersion
-//     ("v1"), matching embedded dapi HostManager boundVersion (gm/microrelease
-//     used types.LegacySessionVersion for the same value).
-//   - VersionedRoutePrefix (/devshard/<name>): <name> is the versiond runtime
-//     name (must match the host's boundVersion and storage session pin).
+//   - VersionedRoutePrefix (/devshard/<name>): <name> from approved_versions
 //
-// HTTP clients still use routePrefix on transport.HTTPClient; this function
-// only resolves the session/storage tag. See devshard/docs/protocol-version.md.
-
-func ProtocolRouteVersion(protocol types.ProtocolVersion) string {
-	if protocol == "" {
-		protocol = types.ProtocolV1
-	}
-	version := string(protocol)
-	if strings.HasPrefix(version, "v") {
-		return version
-	}
-	return "v" + version
-}
-
-func ProtocolSessionVersion(protocol types.ProtocolVersion) string {
-	if protocol == "" {
-		protocol = types.ProtocolV1
-	}
-	return ProtocolRouteVersion(protocol)
-}
-
-func ResolveHostRoutePrefix(protocol types.ProtocolVersion, routePrefix string) string {
-	if routePrefix != "" {
-		return routePrefix
-	}
-	if protocol == types.ProtocolV1 {
-		return LegacyRoutePrefix
-	}
-	return VersionedRoutePrefix(ProtocolRouteVersion(protocol))
-}
-
+// HTTP clients use routePrefix on transport.HTTPClient; this function resolves
+// the session / state-root / settlement tag. See devshard/docs/upgrade.md.
 func VersionForRoutePrefix(routePrefix string) (string, error) {
 	normalized := NormalizeRoutePrefix(routePrefix)
-	if normalized == LegacyRoutePrefix {
-		return types.LegacyRouteSessionVersion, nil
-	}
 
 	trimmed := strings.Trim(normalized, "/")
 	parts := strings.Split(trimmed, "/")
@@ -88,10 +52,6 @@ func VersionForRoutePrefix(routePrefix string) (string, error) {
 func SessionPayloadPath(routePrefix, escrowID string) string {
 	normalized := strings.TrimPrefix(NormalizeRoutePrefix(routePrefix), "/")
 	return fmt.Sprintf("%s/sessions/%s/payloads", normalized, escrowID)
-}
-
-func LegacySessionPayloadPath(escrowID string) string {
-	return SessionPayloadPath(LegacyRoutePrefix, escrowID)
 }
 
 func VersionedSessionPayloadPath(version, escrowID string) string {

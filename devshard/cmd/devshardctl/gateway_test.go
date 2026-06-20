@@ -674,7 +674,7 @@ func TestNewRESTBridgeForProtocolUsesDevshardEscrowEndpointByDefault(t *testing.
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := newRESTBridgeForProtocol(srv.URL, types.ProtocolV1).GetEscrow("83")
+	_, err := bridge.NewRESTBridge(srv.URL).GetEscrow("83")
 	require.NoError(t, err)
 	require.Equal(t, "/productscience/inference/inference/devshard_escrow/83", gotPath)
 }
@@ -818,10 +818,10 @@ func TestAdminAddDevshardWiresSharedPhaseGate(t *testing.T) {
 	t.Cleanup(func() {
 		gatewayRuntimeBuilder = previousBuilder
 	})
-	gatewayRuntimeBuilder = func(cfg RuntimeConfig, chainREST, defaultModel string, perf *PerfTracker) (*devshardRuntime, error) {
+	gatewayRuntimeBuilder = func(cfg RuntimeConfig, deps runtimeBuildDeps) (*devshardRuntime, error) {
 		require.Equal(t, "12", cfg.ID)
-		require.Equal(t, "http://node:1317", chainREST)
-		require.Equal(t, "Qwen/Test", defaultModel)
+		require.Equal(t, "http://node:1317", deps.chainREST)
+		require.Equal(t, "Qwen/Test", deps.defaultModel)
 		rt := &devshardRuntime{
 			id:                    cfg.ID,
 			model:                 cfg.Model,
@@ -925,12 +925,12 @@ func TestAdminImportDevshardLoadsInactiveRuntimeAndAccounting(t *testing.T) {
 		gatewayRuntimeBuilder = previousBuilder
 	})
 	var forwarded bool
-	gatewayRuntimeBuilder = func(cfg RuntimeConfig, chainREST, defaultModel string, perf *PerfTracker) (*devshardRuntime, error) {
+	gatewayRuntimeBuilder = func(cfg RuntimeConfig, deps runtimeBuildDeps) (*devshardRuntime, error) {
 		require.Equal(t, "44", cfg.ID)
 		require.Equal(t, "Kimi/Test", cfg.Model)
 		require.Equal(t, storagePath, cfg.StoragePath)
-		require.Equal(t, "http://node:1317", chainREST)
-		require.Equal(t, "Qwen/Test", defaultModel)
+		require.Equal(t, "http://node:1317", deps.chainREST)
+		require.Equal(t, "Qwen/Test", deps.defaultModel)
 		rt := &devshardRuntime{
 			id:    cfg.ID,
 			model: cfg.Model,
@@ -2228,7 +2228,7 @@ func TestMigrateGatewayLegacyStorageRejectsConflictingEpochDB(t *testing.T) {
 	require.NoError(t, sqlStore.CreateSession(storage.CreateSessionParams{
 		EscrowID:       "12",
 		EpochID:        270,
-		Version:        types.LegacyRouteSessionVersion,
+		Version:        testutil.RuntimeTestVersion,
 		CreatorAddr:    "creator",
 		Config:         types.SessionConfig{},
 		Group:          []types.SlotAssignment{{SlotID: 0, ValidatorAddress: "a"}},
@@ -2314,7 +2314,7 @@ func writeGatewayLegacyStateDB(t *testing.T, path, escrowID string, latestNonce 
 	_, err = db.Exec(
 		`INSERT INTO sessions (escrow_id, version, creator_addr, config_json, group_json, initial_balance, latest_nonce)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		escrowID, types.LegacyRouteSessionVersion, "creator", string(configJSON), string(groupJSON), 1000, latestNonce,
+		escrowID, testutil.RuntimeTestVersion, "creator", string(configJSON), string(groupJSON), 1000, latestNonce,
 	)
 	require.NoError(t, err)
 	for nonce := uint64(1); nonce <= latestNonce; nonce++ {

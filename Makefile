@@ -1,18 +1,15 @@
-.PHONY: release decentralized-api-release inference-chain-release tmkms-release proxy-release proxy-ssl-release bridge-release versiond-release check-docker build-testermint run-blockchain-tests test-blockchain local-build api-local-build node-local-build api-test node-test mock-server-build-docker proxy-build-docker proxy-ssl-build-docker bridge-build-docker run-bls-tests devshardctl-build devshardd-build print-devshard-version print-devshard-protocol-version versiond-build-docker testapp-server-build-docker
+.PHONY: release decentralized-api-release inference-chain-release tmkms-release proxy-release proxy-ssl-release bridge-release versiond-release check-docker build-testermint run-blockchain-tests test-blockchain local-build api-local-build node-local-build api-test node-test mock-server-build-docker proxy-build-docker proxy-ssl-build-docker bridge-build-docker run-bls-tests devshardctl-build devshardd-build print-devshard-version versiond-build-docker testapp-server-build-docker
 
 include scripts/blst-portable.mk
 
 VERSION ?= $(shell git describe --always)
-# devshardd link stamp; Testermint VERSIOND_FORCE follows this via build/devshard-version or `make print-devshard-version`.
+# devshardd protocol name (approved_versions.name); Testermint VERSIOND_FORCE uses build/devshard-version.
 DEVSHARD_VERSION ?= dev
-# State-root / settlement protocol tag (not versiond runtime name). See devshard/docs/protocol-version.md.
-DEVSHARD_PROTOCOL_VERSION ?= v2
+# devshardd build id for logs (e.g. 0.2.13-v2-r2); can change without protocol bump.
+DEVSHARD_BINARY_VERSION ?= dev-log
 
 print-devshard-version:
 	@echo $(DEVSHARD_VERSION)
-
-print-devshard-protocol-version:
-	@echo $(DEVSHARD_PROTOCOL_VERSION)
 TAG_NAME := "release/v$(VERSION)"
 USE_REGISTRY_CACHE ?= 0
 ifeq ($(USE_REGISTRY_CACHE),1)
@@ -129,29 +126,29 @@ api-local-build:
 	@echo "Building decentralized-api locally..."
 	@cd decentralized-api && go build -mod=mod -o ./build/dapi
 
-DEVSHARD_PROTOCOL_LDFLAGS = -X devshard/types.buildStateRootProtocolVersion=$(DEVSHARD_PROTOCOL_VERSION)
+DEVSHARD_VERSION_LDFLAGS = -X main.Version=$(DEVSHARD_VERSION) -X devshard/types.buildStateRootProtocolVersion=$(DEVSHARD_VERSION)
+DEVSHARDD_LDFLAGS = $(DEVSHARD_VERSION_LDFLAGS) -X main.BinaryVersion=$(DEVSHARD_BINARY_VERSION)
 
 devshardctl-build:
-	@echo "Building devshardctl (DEVSHARD_PROTOCOL_VERSION=$(DEVSHARD_PROTOCOL_VERSION))..."
-	@cd devshard && go build -ldflags "-X main.Version=$(DEVSHARD_VERSION) $(DEVSHARD_PROTOCOL_LDFLAGS)" -o ../build/devshardctl ./cmd/devshardctl/
+	@echo "Building devshardctl (DEVSHARD_VERSION=$(DEVSHARD_VERSION))..."
+	@cd devshard && go build -ldflags "$(DEVSHARD_VERSION_LDFLAGS)" -o ../build/devshardctl ./cmd/devshardctl/
 
 devshardd-build:
-	@echo "Building devshardd (DEVSHARD_VERSION=$(DEVSHARD_VERSION) DEVSHARD_PROTOCOL_VERSION=$(DEVSHARD_PROTOCOL_VERSION))..."
+	@echo "Building devshardd (DEVSHARD_VERSION=$(DEVSHARD_VERSION) DEVSHARD_BINARY_VERSION=$(DEVSHARD_BINARY_VERSION))..."
 	@mkdir -p build
 	@$(_DEVSHARDD_BUILD_CMD) --platform $(DOCKER_PLATFORM) --target builder \
 		--build-arg GOOS=$(DOCKER_GOOS) \
 		--build-arg GOARCH=$(DOCKER_GOARCH) \
 		--build-arg BLST_PORTABLE=1 \
 		--build-arg DEVSHARD_VERSION=$(DEVSHARD_VERSION) \
-		--build-arg DEVSHARD_PROTOCOL_VERSION=$(DEVSHARD_PROTOCOL_VERSION) \
-		-f decentralized-api/Dockerfile . \
+		--build-arg DEVSHARD_BINARY_VERSION=$(DEVSHARD_BINARY_VERSION) \
+		-f devshard/Dockerfile . \
 		-t devshardd-builder:latest -q >/dev/null
 	@CID=$$(docker create devshardd-builder:latest) && \
-		docker cp $$CID:/app/decentralized-api/build/devshardd build/devshardd && \
+		docker cp $$CID:/app/devshard/build/devshardd build/devshardd && \
 		docker rm $$CID >/dev/null
 	@chmod +x build/devshardd
 	@echo "$(DEVSHARD_VERSION)" > build/devshard-version
-	@echo "$(DEVSHARD_PROTOCOL_VERSION)" > build/devshard-protocol-version
 	@echo "Built build/devshardd ($$(file build/devshardd | grep -o 'statically linked\|dynamically linked'))"
 
 node-local-build:

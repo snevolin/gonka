@@ -538,6 +538,26 @@ func (m *Manager) runChild(ctx context.Context, c *child) {
 		return
 	}
 
+	binaryLogVersion, err := readBinaryLogVersion(binPath)
+	if err != nil {
+		slog.Error("read binary log version failed", "version", c.version.Name, "bin", binPath, "error", err)
+		return
+	}
+	embeddedProtocol, err := readProtocolVersion(binPath)
+	if err != nil {
+		slog.Error("read protocol version failed", "version", c.version.Name, "bin", binPath, "error", err)
+		return
+	}
+	if embeddedProtocol != c.version.Name {
+		slog.Error(
+			"binary protocol mismatch",
+			"slot", c.version.Name,
+			"embedded", embeddedProtocol,
+			"bin", binPath,
+		)
+		return
+	}
+
 	backoff := time.Second
 	lastStart := time.Now()
 
@@ -552,7 +572,7 @@ func (m *Manager) runChild(ctx context.Context, c *child) {
 			"--data-dir", dataDir,
 			"--port", fmt.Sprintf("%d", c.port),
 		)
-		cmd.Env = childEnv(c.version.Name)
+		cmd.Env = childEnv(binaryLogVersion)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -617,12 +637,12 @@ func (m *Manager) runChild(ctx context.Context, c *child) {
 }
 
 // childEnv sets per-child env vars for devshardd (and testapp in e2e).
-// version is the oracle approved_versions name for this slot.
-func childEnv(version string) []string {
+// binaryLogVersion is the link-time build id (e.g. 0.2.13-v2-r2), not the
+// protocol slot name (v2).
+func childEnv(binaryLogVersion string) []string {
 	return append(
 		os.Environ(),
-		fmt.Sprintf("DEVSHARD_LOG_PREFIX=%s", version),
-		fmt.Sprintf("DEVSHARD_BINARY_VERSION=%s", version),
+		fmt.Sprintf("DEVSHARD_BINARY_LOG_VERSION=%s", binaryLogVersion),
 	)
 }
 

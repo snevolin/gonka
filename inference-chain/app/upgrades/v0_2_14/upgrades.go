@@ -33,6 +33,9 @@ func CreateUpgradeHandler(
 		if err := backfillDevshardEscrowInferenceSealGrace(ctx, k); err != nil {
 			return nil, err
 		}
+		if err := backfillDevshardEscrowConsensusParams(ctx, k); err != nil {
+			return nil, err
+		}
 
 		toVM, err := mm.RunMigrations(ctx, configurator, fromVM)
 		if err != nil {
@@ -212,6 +215,58 @@ func backfillDevshardEscrowInferenceSealGrace(ctx context.Context, k keeper.Keep
 		"updated", len(updateIDs),
 		"default_inference_seal_grace_nonces", ep.DefaultInferenceSealGraceNonces,
 		"default_inference_seal_grace_seconds", ep.DefaultInferenceSealGraceSeconds,
+	)
+	return nil
+}
+
+// backfillDevshardEscrowConsensusParams populates per-escrow validation_rate and
+// vote_threshold_factor snapshots on DevshardEscrow rows created before those
+// fields existed. Rows that already carry a non-zero validation_rate snapshot
+// are left untouched; vote_threshold_factor zero is preserved when governance
+// also uses the legacy groupSize/2 semantics.
+func backfillDevshardEscrowConsensusParams(ctx context.Context, k keeper.Keeper) error {
+	params, err := k.GetParams(ctx)
+	if err != nil {
+		return err
+	}
+	if params.DevshardEscrowParams == nil {
+		k.LogInfo("backfill devshard escrow consensus params skipped: devshard escrow params missing", types.Upgrades)
+		return nil
+	}
+	ep := params.DevshardEscrowParams
+	validationRate := types.DevshardValidationRateForCreate(ep)
+	voteThresholdFactor := types.DevshardVoteThresholdFactorForCreate(ep)
+
+	var updateIDs []uint64
+	if err := k.DevshardEscrows.Walk(ctx, nil, func(_ uint64, escrow types.DevshardEscrow) (bool, error) {
+		if escrow.ValidationRate != 0 {
+			return false, nil
+		}
+		updateIDs = append(updateIDs, escrow.Id)
+		return false, nil
+	}); err != nil {
+		return fmt.Errorf("walk devshard escrows for consensus param backfill: %w", err)
+	}
+
+	for _, id := range updateIDs {
+		escrow, found := k.GetDevshardEscrow(ctx, id)
+		if !found {
+			return fmt.Errorf("get devshard escrow %d during consensus param backfill: not found", id)
+		}
+		if escrow.ValidationRate == 0 {
+			escrow.ValidationRate = validationRate
+		}
+		if escrow.VoteThresholdFactor == 0 && voteThresholdFactor != 0 {
+			escrow.VoteThresholdFactor = voteThresholdFactor
+		}
+		if err := k.SetDevshardEscrow(ctx, escrow); err != nil {
+			return fmt.Errorf("set devshard escrow %d during consensus param backfill: %w", escrow.Id, err)
+		}
+	}
+	k.LogInfo("backfilled devshard escrow consensus params", types.Upgrades,
+		"updated", len(updateIDs),
+		"validation_rate", validationRate,
+		"vote_threshold_factor", voteThresholdFactor,
 	)
 	return nil
 }

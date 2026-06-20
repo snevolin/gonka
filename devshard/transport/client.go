@@ -46,9 +46,10 @@ func getTransport(baseURL string) *http.Transport {
 	return actual.(*http.Transport)
 }
 
-// DefaultRoutePrefix is the legacy URL prefix dapi mounts the in-process
-// HostManager under. Versioned binaries use devshard.VersionedRoutePrefix(...).
-const DefaultRoutePrefix = devshardpkg.LegacyRoutePrefix
+// DefaultRoutePrefix returns the versioned URL prefix clients use when none is configured.
+func DefaultRoutePrefix() string {
+	return devshardpkg.DefaultRoutePrefix()
+}
 
 func transportAddress(baseURL string) string {
 	parsed, err := url.Parse(strings.TrimSpace(baseURL))
@@ -65,8 +66,7 @@ type ClientConfig struct {
 	VerifyTimeout    time.Duration                   // verify-timeout, default 3m
 	QueryTimeout     time.Duration                   // diffs, mempool GETs, default 30s
 	StreamCallback   func(nonce uint64, line string) // if set, receives raw SSE data lines during inference
-	RoutePrefix      string                          // path prefix for all session routes; default /v1/devshard
-	ProtocolVersion  types.ProtocolVersion           // runtime protocol version configured for the escrow
+	RoutePrefix      string                          // path prefix for all session routes; default /devshard/<version>
 	// ParticipantKey is the canonical participant identifier passed to
 	// the admission controller for both AllowRequest and ObserveResult.
 	// Callers MUST use the participant's gonka validator address
@@ -140,7 +140,7 @@ func DefaultClientConfig() ClientConfig {
 		GossipTimeout:    10 * time.Second,
 		VerifyTimeout:    3 * time.Minute,
 		QueryTimeout:     30 * time.Second,
-		RoutePrefix:      DefaultRoutePrefix,
+		RoutePrefix:      DefaultRoutePrefix(),
 	}
 }
 

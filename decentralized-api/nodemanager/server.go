@@ -9,8 +9,8 @@ import (
 	"decentralized-api/apiconfig"
 	"decentralized-api/broker"
 	"decentralized-api/chainphase"
-	"decentralized-api/logging"
-	"devshard/nodemanager/gen"
+	"common/logging"
+	"common/nodemanager/gen"
 
 	"github.com/productscience/inference/x/inference/types"
 	"google.golang.org/grpc/codes"

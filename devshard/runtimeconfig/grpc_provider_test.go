@@ -8,7 +8,7 @@ import (
 	"time"
 
 	devshardpkg "devshard"
-	"devshard/nodemanager/gen"
+	"common/nodemanager/gen"
 	"devshard/runtimeconfig/testserver"
 
 	"github.com/stretchr/testify/assert"

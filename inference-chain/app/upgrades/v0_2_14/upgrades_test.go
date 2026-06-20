@@ -161,6 +161,68 @@ func TestBackfillDevshardEscrowFees_NoEscrowsIsNoOp(t *testing.T) {
 	require.NoError(t, backfillDevshardEscrowFees(ctx, k))
 }
 
+func TestBackfillDevshardEscrowConsensusParams(t *testing.T) {
+	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
+
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, params.DevshardEscrowParams)
+	params.DevshardEscrowParams.ValidationRate = 8800
+	params.DevshardEscrowParams.VoteThresholdFactor = 77
+	require.NoError(t, k.SetParams(ctx, params))
+
+	legacy := &inferencetypes.DevshardEscrow{
+		Creator: "gonka1legacy",
+		Amount:  100,
+		Slots:   []string{"s"},
+	}
+	_, err = k.StoreDevshardEscrow(ctx, legacy, 1)
+	require.NoError(t, err)
+
+	fresh := &inferencetypes.DevshardEscrow{
+		Creator:       "gonka1fresh",
+		Amount:        300,
+		Slots:         []string{"s"},
+		ValidationRate: 6000,
+	}
+	_, err = k.StoreDevshardEscrow(ctx, fresh, 2)
+	require.NoError(t, err)
+
+	require.NoError(t, backfillDevshardEscrowConsensusParams(ctx, k))
+
+	gotLegacy, found := k.GetDevshardEscrow(ctx, 1)
+	require.True(t, found)
+	require.Equal(t, uint32(8800), gotLegacy.ValidationRate)
+	require.Equal(t, uint32(77), gotLegacy.VoteThresholdFactor)
+
+	gotFresh, found := k.GetDevshardEscrow(ctx, 2)
+	require.True(t, found)
+	require.Equal(t, uint32(6000), gotFresh.ValidationRate, "non-zero validation_rate must be preserved")
+}
+
+func TestBackfillDevshardEscrowConsensusParams_LegacyVoteFactorZero(t *testing.T) {
+	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
+
+	params, err := k.GetParams(ctx)
+	require.NoError(t, err)
+	params.DevshardEscrowParams.VoteThresholdFactor = 0
+	require.NoError(t, k.SetParams(ctx, params))
+
+	legacy := &inferencetypes.DevshardEscrow{
+		Creator: "gonka1legacy",
+		Amount:  100,
+		Slots:   []string{"s"},
+	}
+	_, err = k.StoreDevshardEscrow(ctx, legacy, 1)
+	require.NoError(t, err)
+
+	require.NoError(t, backfillDevshardEscrowConsensusParams(ctx, k))
+
+	gotLegacy, found := k.GetDevshardEscrow(ctx, 1)
+	require.True(t, found)
+	require.Equal(t, uint32(0), gotLegacy.VoteThresholdFactor)
+}
+
 func TestBackfillDevshardEscrowParamDefaults_PreservesExistingDefaultInferenceSealGraceNonces(t *testing.T) {
 	k, ctx, _ := keepertest.InferenceKeeperReturningMocks(t)
 

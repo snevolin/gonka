@@ -20,22 +20,16 @@ import (
 	"decentralized-api/statsstorage"
 	"net"
 
+	nmgen "common/nodemanager/gen"
 	"decentralized-api/nodemanager"
-	nmgen "devshard/nodemanager/gen"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
-	internaldevshard "decentralized-api/internal/devshard"
+	"common/logging"
 	"decentralized-api/internal/validation"
-	"decentralized-api/logging"
-	"decentralized-api/observability"
 	"decentralized-api/participant"
-	devshardlogging "devshard/logging"
-	devshardobservability "devshard/observability"
-	devshardstorage "devshard/storage"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -45,8 +39,6 @@ import (
 	"time"
 
 	"github.com/productscience/inference/x/inference/types"
-
-	devshardbridge "devshard/bridge"
 )
 
 func main() {
@@ -74,9 +66,6 @@ func main() {
 	if configManager.GetApiConfig().TestMode {
 		slog.SetLogLoggerLevel(slog.LevelDebug)
 	}
-	devshardlogging.SetLogger(devshardlogging.NewSlogAdapter("subsystem", devshardobservability.ServiceName))
-	devshardobservability.SetRuntime("api", configManager.GetCurrentNodeVersion(), "dapi_inprocess")
-	devshardobservability.SetBuildInfo("api", configManager.GetCurrentNodeVersion(), "")
 
 	natssrv := server.NewServer(configManager.GetNatsConfig())
 	if err := natssrv.Start(); err != nil {
@@ -105,9 +94,6 @@ func main() {
 		return
 	}
 	chainPhaseTracker.UpdateEpochParams(*params.Params.EpochParams)
-	if params.Params.DevshardEscrowParams != nil {
-		internaldevshard.SeedDevshardVersionsCache(configManager, params.Params.DevshardEscrowParams)
-	}
 
 	participantInfo, err := participant.NewCurrentParticipantInfo(recorder)
 	if err != nil {
@@ -157,23 +143,6 @@ func main() {
 	// Create a cancellable context for the entire system
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure resources are cleaned up
-
-	// Initialize OpenTelemetry. Returns a noop shutdown when disabled, so it
-	// is safe to defer unconditionally. Trace context propagation is wired in
-	// either case so downstream services see the trace ids.
-	shutdownObservability, err := observability.Init(ctx, observability.Config{
-		ServiceName:        observability.ServiceName,
-		ParticipantAddress: participantInfo.GetAddress(),
-	})
-	if err != nil {
-		logging.Error("Failed to initialize observability", types.System, "error", err)
-		return
-	}
-	defer func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutdownCancel()
-		_ = shutdownObservability(shutdownCtx)
-	}()
 
 	// Start periodic config auto-flush of dynamic data to DB
 	configManager.StartAutoFlush(ctx, 60*time.Second)
@@ -244,11 +213,6 @@ func main() {
 	commitWorker := poc.NewCommitWorker(artifactStore, recorder, chainPhaseTracker, participantInfo.GetAddress(), commitInterval)
 	defer commitWorker.Close()
 
-	devshardSigner, devshardSignerErr := internaldevshard.NewSignerFromKeyring(*recorder.GetKeyring(), recorder.GetApiAccount().SignerAccount.Name)
-	if devshardSignerErr != nil {
-		logging.Error("devshard signer init failed", types.System, "error", devshardSignerErr)
-	}
-
 	publicServer := pserver.NewServer(
 		nodeBroker,
 		configManager,
@@ -260,63 +224,6 @@ func main() {
 		pserver.WithStatsStorage(statsStore),
 	)
 
-	if devshardSigner != nil {
-		devshardBridge := internaldevshard.NewChainBridge(recorder)
-		httpClient := pserver.NewNoRedirectClient(internaldevshard.MLNodeHTTPTimeout)
-		chainParams := &configParamsProvider{cm: configManager}
-		devshardEngine := internaldevshard.NewEngineAdapter(nodeBroker, configManager.GetCurrentNodeVersion(), payloadStore, chainPhaseTracker, httpClient, chainParams)
-		devshardValidator := internaldevshard.NewValidationAdapter(nodeBroker, configManager.GetCurrentNodeVersion(), chainPhaseTracker, httpClient, devshardBridge, recorder, chainParams)
-
-		// Per-epoch SQLite under /root/.dapi/data/devshard/, or shared Postgres
-		// (same PG vars as payloadstorage) when PGHOST is set. ManagedStorage
-		// runs the background pruner with N=3 retention.
-		// TODO: move to DevshardConfig when config consolidation happens.
-		const devshardDir = "/root/.dapi/data/devshard"
-		const devshardLegacyDB = "/root/.dapi/data/devshard.db"
-		devshardInner, storeErr := devshardstorage.NewStorage(ctx, devshardDir)
-		if storeErr != nil {
-			logging.Error("devshard storage init failed", types.System, "error", storeErr)
-		} else {
-			devshardStore := devshardstorage.NewManagedStorage(devshardInner, 3, &chainPhaseEpochProvider{tracker: chainPhaseTracker})
-			defer devshardStore.Close()
-
-			configManager.SetEpochChangeHandler(func(_, _ uint64) {
-				devshardStore.PruneOnceAsync(ctx)
-			})
-
-			hostManager := internaldevshard.NewHostManager(devshardStore, devshardSigner, devshardEngine, devshardValidator, "v1", devshardBridge, payloadStore, recorder)
-			hostManager.SetAvailabilityProvider(internaldevshard.NewConfigManagerAvailability(configManager, chainPhaseTracker))
-			hostManager.SetMaxNonceProvider(internaldevshard.ConfigManagerMaxNonce(configManager))
-			hostManager.SetRuntimeParamsProvider(internaldevshard.ConfigManagerRuntimeParams(configManager))
-			hostManager.Register(publicServer.DevshardGroup())
-			go func() {
-				migrated, mErr := devshardstorage.MigrateLegacySQLite(devshardLegacyDB, devshardInner, func(escrowID string) (uint64, error) {
-					info, err := devshardBridge.GetEscrow(escrowID)
-					if err != nil {
-						if errors.Is(err, devshardbridge.ErrEscrowNotFound) {
-							return 0, devshardstorage.ErrSkipLegacySession
-						}
-						return 0, err
-					}
-					return info.EpochID, nil
-				})
-				if mErr != nil {
-					logging.Error("devshard legacy migration failed", types.System, "error", mErr)
-					hostManager.SetUnavailable(mErr)
-					return
-				}
-				if migrated > 0 {
-					logging.Info("devshard legacy migration complete", types.System, "sessions_migrated", migrated)
-				}
-
-				devshardStore.Start()
-				hostManager.SetReady()
-				if err := hostManager.RecoverSessions(); err != nil {
-					logging.Error("devshard recovery failed", types.System, "error", err)
-				}
-			}()
-		}
-	}
 	publicServer.Start(addr)
 
 	addr = fmt.Sprintf(":%v", configManager.GetApiConfig().MLServerPort)
@@ -330,11 +237,8 @@ func main() {
 	adminServer.Start(addr)
 
 	nmGrpcPort := configManager.GetApiConfig().NodeManagerGrpcPort
-	if nmGrpcPort == 0 {
-		nmGrpcPort = 9400
-	}
-	// Negative ports explicitly disable the NodeManager gRPC server.
-	if nmGrpcPort > 0 {
+	// port should be set explicitly in the config to start NodeManager GRPC server. 0 means we skip it
+	if nmGrpcPort != 0 {
 		nmGrpcServer := grpc.NewServer()
 		nmgen.RegisterNodeManagerServer(nmGrpcServer, nodemanager.NewServer(nodeBroker, configManager, chainPhaseTracker))
 		reflection.Register(nmGrpcServer)
@@ -403,36 +307,4 @@ func getParams(ctx context.Context, transactionRecorder cosmosclient.InferenceCo
 	}
 	logging.Error("Exhausted all retries to get chain params", types.System, "error", err)
 	return nil, err
-}
-
-// configParamsProvider implements internaldevshard.ChainParamsProvider by
-// reading from dapi's ConfigManager, which syncs chain params every block.
-type configParamsProvider struct {
-	cm *apiconfig.ConfigManager
-}
-
-func (p *configParamsProvider) LogprobsMode() string {
-	mode := p.cm.GetValidationParams().LogprobsMode
-	if mode == "" {
-		return types.DefaultLogprobsMode
-	}
-	return mode
-}
-
-// chainPhaseEpochProvider exposes the current chain epoch to ManagedStorage
-// so the pruner advances the retention horizon even when the host has no
-// CreateSession activity to bump max_observed_epoch from.
-type chainPhaseEpochProvider struct {
-	tracker *chainphase.ChainPhaseTracker
-}
-
-func (p *chainPhaseEpochProvider) CurrentEpochID() uint64 {
-	if p.tracker == nil {
-		return 0
-	}
-	st := p.tracker.GetCurrentEpochState()
-	if st == nil {
-		return 0
-	}
-	return st.LatestEpoch.EpochIndex
 }
