@@ -63,7 +63,7 @@ dev-clean: ## Stop dev stack and remove volumes.
 dev-logs: ## Follow dev overlay logs.
 	docker compose $(DEV_OVERLAY) logs -f
 
-.PHONY: citest-stack citest-stack-build citest-adversarial citest-observability test-gateway-smoke obs-up obs-down
+.PHONY: citest-stack citest-stack-build citest-adversarial citest-observability citest-grpc-transport test-gateway-smoke obs-up obs-down
 citest-stack: ## Phase 8 S1–S6 citest (TESTENV_CITEST=1; needs Docker images + build-devshardd).
 	docker compose $(COMPOSE_BASE) build mock-chain mock-dapi devshardctl versiond-router
 	TESTENV_CITEST=1 go test -tags=testenvci ./citest/ -run 'TestS1_|TestS2_|TestS3_|TestS4_|TestS5_|TestS6_' -count=1 -v -timeout 30m
@@ -71,6 +71,11 @@ citest-stack: ## Phase 8 S1–S6 citest (TESTENV_CITEST=1; needs Docker images +
 citest-adversarial: ## Phase 9 adversarial citest (TESTENV_CITEST=1; rebuild mock-chain + mock-openai).
 	docker compose $(COMPOSE_BASE) build mock-chain mock-dapi mock-openai devshardctl versiond-router
 	TESTENV_CITEST=1 go test -tags=testenvci ./citest/ -run 'TestA1_|TestA2_|TestA3_|TestA4_' -count=1 -v -timeout 30m
+
+citest-grpc-transport: ## Phase 12b G1–G4 gRPC-only gateway citest (see docs/chain-transport-consolidation.md).
+	docker compose $(COMPOSE_BASE) build mock-chain mock-dapi devshardctl versiond-router
+	TESTENV_CITEST=1 go test -tags=testenvci ./citest/ -run 'TestG1_|TestG2_|TestG3_' -count=1 -v -timeout 30m
+	cd .. && go test ./cmd/devshardctl/ -run TestG4_NoRESTChainClientsInGatewayProduction -count=1 -v
 
 citest-observability: ## Phase 10 O1 observability smoke (Jaeger spans + Loki logs + metrics).
 	docker compose $(COMPOSE_BASE) build mock-chain mock-dapi devshardctl versiond-router

@@ -109,20 +109,26 @@ func EndpointsFromConfig(cfg *config.File) Endpoints {
 // Up starts the stack with docker compose up (reuses local images; no --build).
 func (s *Stack) Up(t *testing.T) {
 	t.Helper()
-	s.composeUp(t, false)
+	s.composeUp(t, false, nil)
 }
 
 // UpBuild starts the stack and rebuilds images first.
 func (s *Stack) UpBuild(t *testing.T) {
 	t.Helper()
-	s.composeUp(t, true)
+	s.composeUp(t, true, nil)
+}
+
+// UpServices starts only the named compose services (optionally rebuilding images).
+func (s *Stack) UpServices(t *testing.T, build bool, services ...string) {
+	t.Helper()
+	s.composeUp(t, build, services)
 }
 
 // UpWithObservability starts the stack and observability overlay (see PrepareObservabilityOverlay).
 func (s *Stack) UpWithObservability(t *testing.T, cfg *config.File) {
 	t.Helper()
 	s.PrepareObservabilityOverlay(t, cfg)
-	s.composeUp(t, false)
+	s.composeUp(t, false, nil)
 }
 
 func (s *Stack) composeFileArgs() []string {
@@ -137,7 +143,7 @@ func (s *Stack) composeFileArgs() []string {
 	return args
 }
 
-func (s *Stack) composeUp(t *testing.T, build bool) {
+func (s *Stack) composeUp(t *testing.T, build bool, services []string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
 	defer cancel()
@@ -149,6 +155,7 @@ func (s *Stack) composeUp(t *testing.T, build bool) {
 	if build {
 		args = append(args, "--build")
 	}
+	args = append(args, services...)
 	up := exec.CommandContext(ctx, "docker", args...)
 	up.Dir = s.WorkDir
 	up.Env = append(os.Environ(), "COMPOSE_HTTP_TIMEOUT=300")

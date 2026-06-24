@@ -35,20 +35,18 @@ services:
       CONFIG_PATH: "/app/config.yaml"
       MOCK_CHAIN_GRPC_ADDR: ":{{ .MockChain.GRPCPort }}"
       MOCK_CHAIN_RPC_ADDR: ":{{ .MockChain.RPCPort }}"
-      MOCK_CHAIN_REST_ADDR: ":{{ .MockChain.RESTPort }}"
       MOCK_CHAIN_TESTENV_ADDR: ":{{ .MockChain.TestenvPort }}"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     ports:
       - "{{ .MockChain.GRPCPort }}:{{ .MockChain.GRPCPort }}"
       - "{{ .MockChain.RPCPort }}:{{ .MockChain.RPCPort }}"
-      - "{{ .MockChain.RESTPort }}:{{ .MockChain.RESTPort }}"
       - "{{ .MockChain.TestenvPort }}:{{ .MockChain.TestenvPort }}"
     networks:
       testenv:
         ipv4_address: {{ .Network.BaseIP }}.2
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:{{ .MockChain.RESTPort }}/productscience/inference/inference/devshard_escrow/{{ primaryEscrowID . }}"]
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:{{ .MockChain.RPCPort }}/health"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -205,10 +203,9 @@ services:
     entrypoint: ["devshardctl"]
     environment:
       DEVSHARD_PORT: "{{ .Devshardctl.Port }}"
-      DEVSHARD_CHAIN_REST: http://{{ .MockChain.Host }}:{{ .MockChain.RESTPort }}
       DEVSHARD_CHAIN_GRPC: {{ .MockChain.Host }}:{{ .MockChain.GRPCPort }}
+      DEVSHARD_NODE_MANAGER_ADDR: {{ .MockDapi.Host }}:{{ .MockDapi.GRPCPort }}
       DEVSHARD_CHAIN_ID: "{{ .ChainID }}"
-      DEVSHARD_TX_QUERY_REST: http://{{ .MockChain.Host }}:{{ .MockChain.RESTPort }}
       DEVSHARD_PUBLIC_API: http://{{ .MockDapi.Host }}:{{ .MockDapi.HTTPPort }}
       DEVSHARD_ESCROW_ID: "{{ primaryEscrowID . }}"
       DEVSHARD_MODEL: "{{ primaryModelID . }}"

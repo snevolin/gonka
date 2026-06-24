@@ -655,30 +655,6 @@ func TestGatewayModelsEndpointRejectsUnsupportedMethod(t *testing.T) {
 	require.Equal(t, "GET, HEAD", rec.Header().Get("Allow"))
 }
 
-func TestNewRESTBridgeForProtocolUsesDevshardEscrowEndpointByDefault(t *testing.T) {
-	var gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		json.NewEncoder(w).Encode(map[string]any{
-			"escrow": map[string]any{
-				"id":          "83",
-				"creator":     "gonka1creator",
-				"amount":      "5000000000",
-				"slots":       []string{"gonka1host"},
-				"epoch_index": "1",
-				"app_hash":    "deadbeef",
-				"settled":     false,
-			},
-			"found": true,
-		})
-	}))
-	t.Cleanup(srv.Close)
-
-	_, err := bridge.NewRESTBridge(srv.URL).GetEscrow("83")
-	require.NoError(t, err)
-	require.Equal(t, "/productscience/inference/inference/devshard_escrow/83", gotPath)
-}
-
 func TestAdminDeactivateDevshardAllowsActiveRequestsAndStopsNewChat(t *testing.T) {
 	store, err := NewGatewayStore(filepath.Join(t.TempDir(), "gateway.db"))
 	require.NoError(t, err)
@@ -820,7 +796,8 @@ func TestAdminAddDevshardWiresSharedPhaseGate(t *testing.T) {
 	})
 	gatewayRuntimeBuilder = func(cfg RuntimeConfig, deps runtimeBuildDeps) (*devshardRuntime, error) {
 		require.Equal(t, "12", cfg.ID)
-		require.Equal(t, "http://node:1317", deps.chainREST)
+		require.NotNil(t, deps.bridge)
+		require.NotNil(t, deps.chainClient)
 		require.Equal(t, "Qwen/Test", deps.defaultModel)
 		rt := &devshardRuntime{
 			id:                    cfg.ID,
@@ -837,6 +814,7 @@ func TestAdminAddDevshardWiresSharedPhaseGate(t *testing.T) {
 	g := NewGateway([]*devshardRuntime{existing}, NewGatewayLimiter(2, 200), "Qwen/Test")
 	g.store = store
 	g.baseStorageDir = t.TempDir()
+	g.chainClient = dialTestChainGRPC(t)
 	g.phaseGate = &ChainPhaseGate{}
 	g.phaseGate.storeSnapshot(ChainPhaseSnapshot{
 		EpochPhase:           epochPhasePoCValidate,
@@ -929,7 +907,8 @@ func TestAdminImportDevshardLoadsInactiveRuntimeAndAccounting(t *testing.T) {
 		require.Equal(t, "44", cfg.ID)
 		require.Equal(t, "Kimi/Test", cfg.Model)
 		require.Equal(t, storagePath, cfg.StoragePath)
-		require.Equal(t, "http://node:1317", deps.chainREST)
+		require.NotNil(t, deps.bridge)
+		require.NotNil(t, deps.chainClient)
 		require.Equal(t, "Qwen/Test", deps.defaultModel)
 		rt := &devshardRuntime{
 			id:    cfg.ID,
@@ -947,6 +926,7 @@ func TestAdminImportDevshardLoadsInactiveRuntimeAndAccounting(t *testing.T) {
 	g.store = store
 	g.perfStore = destPerf
 	g.perf = NewPerfTracker(destPerf)
+	g.chainClient = dialTestChainGRPC(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/devshards/import",
 		strings.NewReader(fmt.Sprintf(`{"id":"44","private_key":"secret","model":"Kimi/Test","storage_path":%q,"perf_path":%q}`, storagePath, sourcePerfPath)))
@@ -2367,7 +2347,7 @@ func TestAdminSettingsUpdatesLimiterAndDefaultTokens(t *testing.T) {
 			Message: "please use http://.../v1/ base url",
 			NewURL:  "http://.../v1/chat/completions",
 		},
-	}, t.TempDir(), store)
+	}, t.TempDir(), store, dialTestChainGRPC(t))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings",
 		strings.NewReader(`{"chain_rest":"http://node:2317","public_api":"http://api:9900","default_model":"Qwen/Qwen3-235B-A22B-Instruct-2507-FP8","max_concurrent_requests":7,"max_input_tokens_in_flight":700,"default_request_max_tokens":3072,"request_max_tokens_cap":4096,"tx_gas_limit":700000,"model_limits":[{"model_id":"moonshotai/Kimi-K2.6","access_mode":"admin_only","access_message":"Kimi temporarily unavailable"}],"disabled":{"enabled":true,"message":"please use ... base url","new_url":"https://.../v1/chat/completions"},"participant_throttle":{"request_burst":42,"recovery_per_minute":7,"http_quarantine_ms":1100,"transport_failure_quarantine_ms":1200,"empty_stream_quarantine_ms":1300,"stalled_winner_quarantine_ms":1400,"empty_stream_threshold":2},"redundancy":{"receipt_timeout_ms":1500,"first_token_timeout_floor_ms":1600,"per_input_token_first_token_lag_ms":17,"inter_chunk_stall_timeout_ms":1800,"streaming_attempt_hard_timeout_ms":1810,"non_stream_response_floor_ms":1900,"non_stream_no_content_timeout_ms":2200,"non_stream_max_attempt_wait_ms":2600,"per_input_token_response_lag_ms":20,"secondary_wait_after_winner_ms":2100,"parallel_advantage_threshold":0.4,"unresponsive_threshold":0.8}}`))
@@ -2385,7 +2365,7 @@ func TestAdminSettingsUpdatesLimiterAndDefaultTokens(t *testing.T) {
 	state, ok, err := store.LoadState()
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, "http://node:2317", state.Settings.ChainREST)
+	require.Equal(t, "http://node:1317", state.Settings.ChainREST) // deprecated field; admin chain_rest updates are ignored
 	require.Equal(t, "http://api:9900", state.Settings.PublicAPI)
 	require.Equal(t, "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8", state.Settings.DefaultModel)
 	require.EqualValues(t, 3072, state.Settings.DefaultRequestMaxTokens)
@@ -2440,7 +2420,7 @@ func TestAdminSettingsRejectsInvalidTuning(t *testing.T) {
 		DefaultRequestMaxTokens: 1000,
 		MaxConcurrentRequests:   2,
 		MaxInputTokensInFlight:  200,
-	}, t.TempDir(), store)
+	}, t.TempDir(), store, dialTestChainGRPC(t))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings",
 		strings.NewReader(`{"participant_throttle":{"empty_stream_threshold":0}}`))
@@ -2473,7 +2453,7 @@ func TestAdminSettingsUpdatesEscrowRotationSettlementEnabled(t *testing.T) {
 		DefaultRequestMaxTokens: 1000,
 		MaxConcurrentRequests:   2,
 		MaxInputTokensInFlight:  200,
-	}, t.TempDir(), store)
+	}, t.TempDir(), store, dialTestChainGRPC(t))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/admin/settings",
 		strings.NewReader(`{"escrow_rotation":{"settlement_enabled":true}}`))

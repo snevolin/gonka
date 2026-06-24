@@ -17,13 +17,13 @@ All settings can be passed as flags or environment variables. Flags take precede
 | ------ | ------ | ------ | ------ | ------ |
 | `--private-key` | `DEVSHARD_PRIVATE_KEY` | yes | - | Hex-encoded secp256k1 private key |
 | `--escrow-id` | `DEVSHARD_ESCROW_ID` | yes | - | On-chain escrow ID |
-| `--chain-rest` | `DEVSHARD_CHAIN_REST` | no | `http://localhost:1317` | Chain REST API URL |
+| `--chain-grpc` | `DEVSHARD_CHAIN_GRPC`, `NODE_GRPC_URL` | no | `localhost:9090` | Chain gRPC URL (queries and tx) |
 | `--model` | `DEVSHARD_MODEL` | no | `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8` | Default model (used when request omits `model`) |
 | `--port` | `DEVSHARD_PORT` | no | `8080` | Listen port |
 | `--storage-path` | `DEVSHARD_STORAGE_PATH` | no | `~/.cache/gonka/devshard-<escrow-id>.db` | SQLite path for crash recovery |
 | - | `DEVSHARD_API_KEYS` | no | - | Comma-separated public API bearer keys |
 | - | `DEVSHARD_ADMIN_API_KEY` | no | - | Admin bearer key for finalize and `/v1/admin/*` endpoints |
-| - | `DEVSHARD_CHAIN_ID` | no | queried from REST | Chain ID used when signing admin-created escrow transactions |
+| - | `DEVSHARD_CHAIN_ID` | no | queried from chain gRPC | Chain ID used when signing admin-created escrow transactions |
 | - | `DEVSHARD_TX_FEE_AMOUNT` | no | `1000000` | Fee amount for admin-created escrow transactions |
 | - | `DEVSHARD_TX_FEE_DENOM` | no | `ngonka` | Fee denom for admin-created escrow transactions |
 | - | `DEVSHARD_TX_GAS_LIMIT` | no | `500000` | Fallback gas limit for admin-created escrow and settlement transactions |
@@ -43,7 +43,7 @@ All settings can be passed as flags or environment variables. Flags take precede
 devshardctl \
   --private-key "deadbeef..." \
   --escrow-id 42 \
-  --chain-rest "http://localhost:1317"
+  --chain-grpc "localhost:9090"
 
 # In another terminal:
 curl -X POST http://localhost:8080/v1/chat/completions \
@@ -56,7 +56,7 @@ Or using environment variables:
 ```bash
 export DEVSHARD_PRIVATE_KEY="deadbeef..."
 export DEVSHARD_ESCROW_ID="42"
-export DEVSHARD_CHAIN_REST="http://localhost:1317"
+export DEVSHARD_CHAIN_GRPC="localhost:9090"
 
 devshardctl
 ```
@@ -218,8 +218,8 @@ continue to reflect effective gateway capacity.
 ### POST /v1/admin/escrows
 
 Admin endpoint. Creates a new on-chain devshard escrow by signing
-`MsgCreateDevshardEscrow` locally and broadcasting the signed transaction to
-`DEVSHARD_CHAIN_REST` via `/cosmos/tx/v1beta1/txs`. By default, the returned
+`MsgCreateDevshardEscrow` locally and broadcasting via chain gRPC
+(`cosmos.tx.v1beta1`). By default, the returned
 escrow ID is also registered as an active local gateway runtime.
 
 ```bash
@@ -252,8 +252,8 @@ the host is fully recovered for capacity-weighted routing.
 ### POST /v1/admin/devshards/{id}/settle
 
 Admin endpoint. Locally deactivates the devshard, finalizes it if it is not
-already in settlement phase, signs `MsgSettleDevshardEscrow`, and broadcasts the
-signed transaction to `DEVSHARD_CHAIN_REST`.
+already in settlement phase, signs `MsgSettleDevshardEscrow`, and broadcasts via
+chain gRPC.
 
 ```bash
 curl -X POST http://localhost:8080/v1/admin/devshards/42/settle \
@@ -282,7 +282,7 @@ depletion replacement are disabled.
 1. During inference phase, when the chain is within `pre_poc_blocks` of PoC,
    the gateway ensures `temp_count` temp escrows exist for the current epoch.
 2. It then locally deactivates active non-temp escrows, finalizes them, and
-   settles them on-chain through `DEVSHARD_CHAIN_REST`.
+   settles them on-chain via chain gRPC.
 3. After the next epoch leaves PoC, it ensures `target_count` regular escrows
    exist for the new epoch.
 4. It then deactivates, finalizes, and settles the previous epoch's temp

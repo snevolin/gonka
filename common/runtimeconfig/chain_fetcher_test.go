@@ -66,6 +66,9 @@ func (f *fakeInferenceClient) GetAllModelPerTokenPrices(context.Context, *infere
 func (f *fakeInferenceClient) GetAllModelCapacities(context.Context, *inferencetypes.QueryGetAllModelCapacitiesRequest, ...grpc.CallOption) (*inferencetypes.QueryGetAllModelCapacitiesResponse, error) {
 	panic("not implemented")
 }
+func (f *fakeInferenceClient) PreservedNodesSnapshot(context.Context, *inferencetypes.QueryPreservedNodesSnapshotRequest, ...grpc.CallOption) (*inferencetypes.QueryPreservedNodesSnapshotResponse, error) {
+	panic("not implemented")
+}
 
 var _ chain.InferenceClient = (*fakeInferenceClient)(nil)
 

@@ -21,6 +21,8 @@ import (
 	"time"
 
 	devshardpkg "devshard"
+	"common/chain"
+	chaintx "common/chain/tx"
 	"devshard/bridge"
 	"devshard/runtimeparams"
 	"devshard/storage"
@@ -59,6 +61,7 @@ type Gateway struct {
 	rotationFailures      map[string]struct{}
 	runtimeParams         *runtimeparams.Managed
 	runtimeParamsClose    func()
+	chainClient           *chain.Client
 	finalizeMu            sync.Mutex
 	settlementMu          sync.Mutex
 	settlementInFlight    map[string]struct{}
@@ -245,7 +248,10 @@ func buildRuntime(cfg RuntimeConfig, deps runtimeBuildDeps) (*devshardRuntime, e
 		perf = NewPerfTracker(nil)
 	}
 
-	br := bridge.NewRESTBridge(deps.chainREST)
+	br := deps.bridge
+	if br == nil {
+		return nil, fmt.Errorf("runtime %s: chain bridge is required", cfg.ID)
+	}
 	if err := migrateGatewayLegacyStorage(cfg.StoragePath, legacyStoragePath, cfg.ID, br); err != nil {
 		return nil, fmt.Errorf("runtime %s: migrate legacy storage: %w", cfg.ID, err)
 	}
@@ -304,10 +310,25 @@ func (g *Gateway) runtimeBuildDeps(perf *PerfTracker) runtimeBuildDeps {
 
 func (g *Gateway) runtimeBuildDepsFromSettings(perf *PerfTracker, settings GatewaySettings) runtimeBuildDeps {
 	return runtimeBuildDeps{
-		chainREST:    firstNonEmpty(settings.ChainREST, g.settings.ChainREST),
+		bridge:       g.chainBridge(),
+		chainClient:  g.chainClient,
 		defaultModel: firstNonEmpty(settings.DefaultModel, g.settings.DefaultModel),
 		perf:         perf,
 	}
+}
+
+func (g *Gateway) chainBridge() bridge.MainnetBridge {
+	if g == nil || g.chainClient == nil {
+		return nil
+	}
+	return bridge.NewGRPCBridge(g.chainClient)
+}
+
+func (g *Gateway) newChainTxManager(settings GatewaySettings, chainID, feeDenom string, feeAmount, gasLimit uint64) (*chaintx.Manager, error) {
+	if g == nil || g.chainClient == nil {
+		return nil, fmt.Errorf("chain gRPC client is not configured")
+	}
+	return newGatewayChainTxClient(g.chainClient.Conn(), settings, chainID, feeDenom, feeAmount, gasLimit)
 }
 
 func resolveRuntimeRoutePrefix(configured string) string {
@@ -490,19 +511,20 @@ func NewGateway(runtimes []*devshardRuntime, limiter *GatewayLimiter, defaultMod
 	return g
 }
 
-func NewManagedGateway(runtimes []*devshardRuntime, limiter *GatewayLimiter, settings GatewaySettings, baseStorageDir string, store *GatewayStore, perfArgs ...*PerfTracker) *Gateway {
+func NewManagedGateway(runtimes []*devshardRuntime, limiter *GatewayLimiter, settings GatewaySettings, baseStorageDir string, store *GatewayStore, chainClient *chain.Client, perfArgs ...*PerfTracker) *Gateway {
 	settings = settings.WithTuningDefaults()
 	applyGatewayTuningSettings(settings)
 	g := NewGateway(runtimes, limiter, settings.DefaultModel)
 	g.settings = settings
 	g.baseStorageDir = baseStorageDir
 	g.store = store
+	g.chainClient = chainClient
 	if len(perfArgs) > 0 && perfArgs[0] != nil {
 		g.perf = perfArgs[0]
 	}
 	g.phaseGate = NewChainPhaseGate(settings.PublicAPI, 0)
-	if g.phaseGate != nil {
-		g.phaseGate.SetPreservedSnapshotBaseURL(settings.ChainREST)
+	if g.phaseGate != nil && chainClient != nil {
+		g.phaseGate.SetChainQueryClient(chainClient.InferenceQueryClient())
 	}
 	if g.phaseGate != nil {
 		for _, rt := range g.runtimeOrder {
@@ -511,11 +533,7 @@ func NewManagedGateway(runtimes []*devshardRuntime, limiter *GatewayLimiter, set
 		g.attachCapacityStateToPhaseGate()
 		g.phaseGate.Start()
 	}
-	g.escrowChecker = NewEscrowChecker(func() string {
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		return g.settings.ChainREST
-	})
+	g.escrowChecker = NewEscrowChecker(g.chainBridge)
 	for _, rt := range g.runtimeOrder {
 		g.attachEscrowChecker(rt)
 	}
@@ -2060,7 +2078,7 @@ func (g *Gateway) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		g.mu.Lock()
 		settings := g.settings
 		if req.ChainREST != nil {
-			settings.ChainREST = strings.TrimSpace(*req.ChainREST)
+			log.Printf("admin settings: chain_rest is deprecated and ignored (use DEVSHARD_CHAIN_GRPC / chain_grpc)")
 		}
 		if req.PublicAPI != nil {
 			settings.PublicAPI = strings.TrimSpace(*req.PublicAPI)
@@ -2122,8 +2140,8 @@ func (g *Gateway) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			g.phaseGate.Stop()
 		}
 		g.phaseGate = NewChainPhaseGate(settings.PublicAPI, 0)
-		if g.phaseGate != nil {
-			g.phaseGate.SetPreservedSnapshotBaseURL(settings.ChainREST)
+		if g.phaseGate != nil && g.chainClient != nil {
+			g.phaseGate.SetChainQueryClient(g.chainClient.InferenceQueryClient())
 		}
 		for _, rt := range g.runtimeOrder {
 			g.attachRuntimeSharedState(rt)
@@ -2525,12 +2543,12 @@ func (g *Gateway) handleAdminEscrows(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":{"message":%q}}`, err.Error()), http.StatusBadRequest)
 		return
 	}
-	txClient, err := newGatewayRESTChainTxClient(g.settings, req.ChainID, req.FeeDenom, req.FeeAmount, req.GasLimit)
+	txMgr, err := g.newChainTxManager(g.settings, req.ChainID, req.FeeDenom, req.FeeAmount, req.GasLimit)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"message":%q}}`, err.Error()), http.StatusBadRequest)
 		return
 	}
-	result, err := txClient.CreateDevshardEscrow(r.Context(), signer, req.Amount, modelID)
+	result, err := txMgr.CreateDevshardEscrow(r.Context(), signer, req.Amount, modelID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":{"message":%q}}`, err.Error()), http.StatusBadGateway)
 		return
@@ -2574,19 +2592,6 @@ func (g *Gateway) handleAdminEscrows(w http.ResponseWriter, r *http.Request) {
 	response["model"] = record.Model
 	response["storage_path"] = record.StoragePath
 	writeJSON(w, response)
-}
-
-func newGatewayRESTChainTxClient(settings GatewaySettings, chainID, feeDenom string, feeAmount, gasLimit uint64) (*RESTChainTxClient, error) {
-	return NewRESTChainTxClient(RESTChainTxConfig{
-		BaseURL:      settings.ChainREST,
-		TxQueryURL:   firstNonEmpty(os.Getenv("DEVSHARD_TX_QUERY_REST"), "http://node1.gonka.ai:8000/chain-api"),
-		ChainID:      firstNonEmpty(chainID, os.Getenv("DEVSHARD_CHAIN_ID")),
-		FeeDenom:     firstNonEmpty(feeDenom, os.Getenv("DEVSHARD_TX_FEE_DENOM")),
-		FeeAmount:    firstNonZeroUint64(feeAmount, uint64(readInt64Env("DEVSHARD_TX_FEE_AMOUNT", int64(defaultTxFeeAmount)))),
-		GasLimit:     firstNonZeroUint64(gasLimit, settings.TxGasLimit, uint64(readInt64Env("DEVSHARD_TX_GAS_LIMIT", int64(defaultTxGasLimit)))),
-		PollInterval: txSettingDurationMS(os.Getenv("DEVSHARD_TX_POLL_INTERVAL_MS"), defaultTxPollInterval),
-		PollTimeout:  txSettingDurationMS(os.Getenv("DEVSHARD_TX_POLL_TIMEOUT_MS"), defaultTxPollTimeout),
-	})
 }
 
 func firstNonZeroUint64(values ...uint64) uint64 {

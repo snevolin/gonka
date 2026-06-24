@@ -152,7 +152,7 @@ func buildChainRuntime(ctx context.Context, nodeConfig ChainNodeConfig) (*chainR
 		return nil, fmt.Errorf("tx manager: %w", err)
 	}
 
-	chainEvents := newChainEventBridge(ctx, nodeConfig.ChainRpcUrl, chainClient, txMgr)
+	chainEvents := newChainEventBridge(ctx, nodeConfig.ChainRpcUrl, chainClient, chaintx.NewDisputeSubmitter(txMgr))
 	return &chainRuntime{
 		client:      chainClient,
 		identity:    identity,

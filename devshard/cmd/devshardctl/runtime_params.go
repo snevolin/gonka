@@ -9,11 +9,12 @@ import (
 
 	"common/chain"
 	mlnodeclient "common/nodemanager"
+	"devshard/bridge"
 	"devshard/runtimeconfig"
 	"devshard/runtimeparams"
 )
 
-func initGatewayRuntimeParams(ctx context.Context, chainREST, chainGRPC string) (*runtimeparams.Managed, func(), error) {
+func initGatewayRuntimeParams(ctx context.Context, chainGRPC string) (*runtimeparams.Managed, func(), error) {
 	env := runtimeparams.SettingsFromEnv()
 
 	var nmClient *mlnodeclient.Client
@@ -29,7 +30,7 @@ func initGatewayRuntimeParams(ctx context.Context, chainREST, chainGRPC string) 
 		}
 	}
 
-	chainFetcher, chainClose, err := newGatewayChainFetcher(chainREST, chainGRPC)
+	chainFetcher, chainClose, err := newGatewayChainFetcher(chainGRPC)
 	if err != nil {
 		if nmClose != nil {
 			nmClose()
@@ -69,30 +70,26 @@ func initGatewayRuntimeParams(ctx context.Context, chainREST, chainGRPC string) 
 	return managed, closeAll, nil
 }
 
-func newGatewayChainFetcher(chainREST, chainGRPC string) (runtimeconfig.ChainParamsFetcher, func(), error) {
+func newGatewayChainFetcher(chainGRPC string) (runtimeconfig.ChainParamsFetcher, func(), error) {
 	chainGRPC = strings.TrimSpace(chainGRPC)
-	if chainGRPC != "" {
-		client, err := chain.New(chainGRPC)
-		if err != nil {
-			return nil, nil, fmt.Errorf("chain gRPC dial %s: %w", chainGRPC, err)
-		}
-		closeFn := func() {
-			if c, ok := client.Conn().(interface{ Close() error }); ok {
-				_ = c.Close()
-			}
-		}
-		slog.Info("runtime params chain fetcher", "transport", "grpc", "url", chainGRPC)
-		return runtimeparams.NewGRPCChainFetcher(client), closeFn, nil
+	if chainGRPC == "" {
+		return nil, nil, fmt.Errorf("chain gRPC URL is required")
 	}
-	if strings.TrimSpace(chainREST) == "" {
-		return nil, nil, fmt.Errorf("chain REST URL is required when chain gRPC URL is unset")
+	client, err := chain.New(chainGRPC)
+	if err != nil {
+		return nil, nil, fmt.Errorf("chain gRPC dial %s: %w", chainGRPC, err)
 	}
-	slog.Warn("runtime params chain fetcher: gRPC URL unset; using REST fallback", "rest", chainREST)
-	return runtimeparams.NewRESTChainFetcher(chainREST, nil), nil, nil
+	closeFn := func() {
+		if c, ok := client.Conn().(interface{ Close() error }); ok {
+			_ = c.Close()
+		}
+	}
+	slog.Info("runtime params chain fetcher", "transport", "grpc", "url", chainGRPC)
+	return runtimeparams.NewGRPCChainFetcher(client), closeFn, nil
 }
 
-func mustInitGatewayRuntimeParams(ctx context.Context, chainREST, chainGRPC string) (*runtimeparams.Managed, func()) {
-	managed, closeFn, err := initGatewayRuntimeParams(ctx, chainREST, chainGRPC)
+func mustInitGatewayRuntimeParams(ctx context.Context, chainGRPC string) (*runtimeparams.Managed, func()) {
+	managed, closeFn, err := initGatewayRuntimeParams(ctx, chainGRPC)
 	if err != nil {
 		log.Fatalf("runtime params provider: %v", err)
 	}
@@ -103,15 +100,15 @@ func mustInitGatewayRuntimeParams(ctx context.Context, chainREST, chainGRPC stri
 }
 
 type runtimeBuildDeps struct {
-	chainREST    string
-	chainGRPC    string
+	bridge       bridge.MainnetBridge
+	chainClient  *chain.Client
 	defaultModel string
 	perf         *PerfTracker
 }
 
 func (d runtimeBuildDeps) validate() error {
-	if d.chainREST == "" {
-		return fmt.Errorf("chain REST URL is required")
+	if d.bridge == nil || d.chainClient == nil {
+		return fmt.Errorf("chain gRPC client is required")
 	}
 	return nil
 }

@@ -24,7 +24,20 @@ func BootS1Stack(t *testing.T, prefix string) (*Stack, *config.File, Endpoints) 
 	return stack, cfg, EndpointsFromConfig(cfg)
 }
 
-// BootS1ObsStack is like BootS1Stack but enables the observability overlay (Jaeger/Loki/Grafana).
+// BootS1StackBuild is like BootS1Stack but rebuilds compose images first (devshardctl gRPC wiring).
+func BootS1StackBuild(t *testing.T, prefix string) (*Stack, *config.File, Endpoints) {
+	t.Helper()
+	stack := NewStack(t, prefix)
+	RequireLinuxDevshardd(t, stack.TestenvDir)
+	WriteS1Config(t, stack.WorkDir)
+	stack.RunGencompose(t)
+	cfg := stack.LoadConfig(t)
+	requireTwoVersiondHosts(t, cfg)
+	RequireGatewayGRPCOnlyCompose(t, stack.ComposePath)
+	stack.UpBuild(t)
+	return stack, cfg, EndpointsFromConfig(cfg)
+}
+
 func BootS1ObsStack(t *testing.T, prefix string) (*Stack, *config.File, Endpoints, ObservabilityEndpoints) {
 	t.Helper()
 	stack := NewStack(t, prefix)

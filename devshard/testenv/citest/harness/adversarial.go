@@ -97,6 +97,12 @@ func RequireWarmKeyRevoked(t *testing.T, cfg *config.File, granter, warmAddress 
 	}
 }
 
+// DialMockChainGRPC dials the mock-chain inference gRPC port from a citest config.
+func DialMockChainGRPC(t *testing.T, cfg *config.File) *grpc.ClientConn {
+	t.Helper()
+	return dialMockChainGRPC(t, MockChainGRPCFromConfig(cfg))
+}
+
 func dialMockChainGRPC(t *testing.T, addr string) *grpc.ClientConn {
 	t.Helper()
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))

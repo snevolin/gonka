@@ -8,6 +8,8 @@ Config-driven via `config/config.yaml` and `cmd/gencompose`.
 ## Documentation
 
 - **Stack scenarios (S1–S6):** [`docs/scenarios.md`](docs/scenarios.md)
+- **gRPC transport plan (G1–G4):** [`docs/chain-transport-consolidation.md`](docs/chain-transport-consolidation.md)
+- **Phase 12 index:** [`docs/phase12-followup.md`](docs/phase12-followup.md)
 - **Operator runbook:** [`../docs/testenv-v2.md`](../docs/testenv-v2.md)
 - **Design plan:** [`docs/testenv-v2-plan.md`](docs/testenv-v2-plan.md)
 
@@ -19,10 +21,10 @@ Go packages under `devshard/testenv/` — what each one is for:
 |---------|---------|
 | **`config/`** | Schema for `config.yaml`: hosts, escrows, mock service ports, versiond mode, network CIDR. `Load` / `Validate` / `ApplyDefaults` / `Save`; chain-seed fields feed mock-chain. |
 | **`cmd/gencompose`** | Reads config, generates keys, syncs chain seed, materializes keyrings, writes `docker-compose.yml` + `.env`. Single entry point for `make gen-compose`. |
-| **`cmd/mockchain`** | Container entrypoint: loads config into an in-memory chain store and serves **gRPC**, **CometBFT RPC**, **LCD REST**, and **admin** HTTP from `mockchain/`. |
+| **`cmd/mockchain`** | Container entrypoint: loads config into an in-memory chain store and serves **gRPC**, **CometBFT RPC**, and **admin** HTTP from `mockchain/`. |
 | **`cmd/mockdapi`** | Container entrypoint: gRPC NodeManager (`GetRuntimeConfig`, `AcquireMLNode`) + HTTP chainoracle (`/versions`, blocks SSE) + testenv fault proxy. |
 | **`cmd/mockopenai`** | Container entrypoint: OpenAI-compatible `POST /v1/chat/completions` (JSON + SSE) with deterministic replies and fault knobs. |
-| **`mockchain/`** | Fake Cosmos chain library: escrow/participant store, gRPC query server, REST tx broadcast, RPC events, seed loader, `/testenv` admin mutations. |
+| **`mockchain/`** | Fake Cosmos chain library: escrow/participant store, gRPC query/tx server, RPC events, seed loader, `/testenv` admin mutations. |
 | **`mockdapi/`** | Fake dapi library: polls mock-chain for params, serves long-poll runtime config, hands out mock-openai URL as ML node, mounts `gatewayphase` stubs. |
 | **`mockopenai/`** | Fake ML node library: minimal OpenAI HTTP API used by production `devshardd` after `AcquireMLNode`. |
 | **`gatewayphase/`** | Tiny HTTP stubs for devshardctl’s **chain epoch phase** poller (`ChainPhaseGate`): `/v1/epochs/latest` and `/v1/epochs/current/participants`. Mounted on mock-dapi; not a mock gateway. |
@@ -300,7 +302,7 @@ OpenAI path: `POST /v1/chat/completions` → gateway → versiond-router (sticky
 
 | Service | Ports | Notes |
 |---------|-------|-------|
-| mock-chain | 9090 gRPC, 26657 RPC, 1317 REST, 9191 admin | Chain seed from `config.yaml` |
+| mock-chain | 9090 gRPC, 26657 RPC, 9191 admin | Chain seed from `config.yaml` |
 | mock-dapi | 9400 gRPC, 9100 HTTP | `GetRuntimeConfig`, blocks SSE, `/versions` |
 | mock-openai | 8088 | OpenAI-compatible ML stub |
 | versiond-0..2 | 8080 (internal) | `VERSIOND_ORACLE_URL` → mock-dapi |

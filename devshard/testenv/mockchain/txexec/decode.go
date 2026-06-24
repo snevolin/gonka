@@ -1,4 +1,4 @@
-package restface
+package txexec
 
 import (
 	"fmt"
@@ -9,16 +9,18 @@ import (
 )
 
 const (
-	createEscrowMsgTypeURL = "/inference.inference.MsgCreateDevshardEscrow"
-	settleEscrowMsgTypeURL = "/inference.inference.MsgSettleDevshardEscrow"
+	CreateEscrowMsgTypeURL = "/inference.inference.MsgCreateDevshardEscrow"
+	SettleEscrowMsgTypeURL = "/inference.inference.MsgSettleDevshardEscrow"
 )
 
-type decodedMsg struct {
-	create *inferencetypes.MsgCreateDevshardEscrow
-	settle *inferencetypes.MsgSettleDevshardEscrow
+// DecodedMsg is one inference message extracted from a signed tx.
+type DecodedMsg struct {
+	Create *inferencetypes.MsgCreateDevshardEscrow
+	Settle *inferencetypes.MsgSettleDevshardEscrow
 }
 
-func decodeTxMessages(txBytes []byte) ([]decodedMsg, error) {
+// DecodeTxMessages parses a signed TxRaw and returns supported inference messages.
+func DecodeTxMessages(txBytes []byte) ([]DecodedMsg, error) {
 	var raw txtypes.TxRaw
 	if err := proto.Unmarshal(txBytes, &raw); err != nil {
 		return nil, fmt.Errorf("decode tx raw: %w", err)
@@ -30,24 +32,24 @@ func decodeTxMessages(txBytes []byte) ([]decodedMsg, error) {
 	if len(body.Messages) == 0 {
 		return nil, fmt.Errorf("tx has no messages")
 	}
-	out := make([]decodedMsg, 0, len(body.Messages))
+	out := make([]DecodedMsg, 0, len(body.Messages))
 	for _, anyMsg := range body.Messages {
 		if anyMsg == nil {
 			continue
 		}
 		switch anyMsg.TypeUrl {
-		case createEscrowMsgTypeURL:
+		case CreateEscrowMsgTypeURL:
 			var msg inferencetypes.MsgCreateDevshardEscrow
 			if err := proto.Unmarshal(anyMsg.Value, &msg); err != nil {
 				return nil, fmt.Errorf("decode MsgCreateDevshardEscrow: %w", err)
 			}
-			out = append(out, decodedMsg{create: &msg})
-		case settleEscrowMsgTypeURL:
+			out = append(out, DecodedMsg{Create: &msg})
+		case SettleEscrowMsgTypeURL:
 			var msg inferencetypes.MsgSettleDevshardEscrow
 			if err := proto.Unmarshal(anyMsg.Value, &msg); err != nil {
 				return nil, fmt.Errorf("decode MsgSettleDevshardEscrow: %w", err)
 			}
-			out = append(out, decodedMsg{settle: &msg})
+			out = append(out, DecodedMsg{Settle: &msg})
 		default:
 			return nil, fmt.Errorf("unsupported message type %q", anyMsg.TypeUrl)
 		}

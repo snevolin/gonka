@@ -5,6 +5,7 @@ CometBFT RPC + LCD REST), mock-dapi (chainoracle + NodeManager long-poll), mock-
 versiond × N supervising devshardd, versiond-router, and devshardctl gateway.
 
 **Stack scenarios & tests:** [`testenv/docs/scenarios.md`](../testenv/docs/scenarios.md)  
+**gRPC transport consolidation (Phase 12b):** [`testenv/docs/chain-transport-consolidation.md`](../testenv/docs/chain-transport-consolidation.md)  
 **Package README:** [`testenv/README.md`](../testenv/README.md)
 
 ## Quick start
@@ -66,6 +67,12 @@ Docker stack citest (S1–S6 + A1–A4):
 make -C devshard ci-testenv-integration
 # or stepwise from testenv/:
 make build-devshardd && make citest-stack && make citest-adversarial
+```
+
+gRPC-only gateway transport (G1–G2, G4; see [`chain-transport-consolidation.md`](../testenv/docs/chain-transport-consolidation.md)):
+
+```bash
+make -C devshard/testenv citest-grpc-transport
 ```
 
 Generate an isolated citest workspace:

@@ -19,6 +19,7 @@ ci-testenv-unit:
 ci-testenv-integration:
 	$(MAKE) -C testenv build-devshardd
 	$(MAKE) -C testenv citest-stack
+	$(MAKE) -C testenv citest-grpc-transport
 	$(MAKE) -C testenv citest-adversarial
 
 integration-test:

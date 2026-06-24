@@ -627,7 +627,7 @@ type statusResponse struct {
 //
 // These fields are written as JSON numbers (native Go encode). They are not
 // used to decode Cosmos REST; grpc-gateway stringified uint64/int64 fields are
-// handled in devshard/bridge/rest.go (escrowResponse) with `json:"...,string"`.
+// handled in devshard/bridge/grpc.go when mapping protobuf escrow fields.
 type statusSessionConfig struct {
 	RefusalTimeout            int64  `json:"refusal_timeout"`
 	ExecutionTimeout          int64  `json:"execution_timeout"`

@@ -20,7 +20,6 @@ params:
 mock_chain:
   grpc_port: 19090
   rpc_port: 26667
-  rest_port: 21317
   testenv_port: 19191
 mock_dapi:
   grpc_port: 19400

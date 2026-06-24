@@ -10,7 +10,7 @@ versiond-router, devshardctl, Postgres) and asserts production-like behaviour en
 
 | Service | Role in tests |
 |---------|----------------|
-| **mock-chain** | Cosmos gRPC `:9090`, CometBFT RPC `:26657`, LCD REST `:1317`, admin `/testenv/*` |
+| **mock-chain** | Cosmos gRPC `:9090`, CometBFT RPC `:26657`, admin `/testenv/*` |
 | **mock-dapi** | NodeManager gRPC (`GetRuntimeConfig` long-poll), chainoracle HTTP, fault proxy |
 | **mock-openai** | OpenAI-compatible ML upstream for devshardd after `AcquireMLNode` |
 | **versiond-0 / versiond-1** | Supervise linux **devshardd** child (protocol `v2`) |
@@ -63,6 +63,19 @@ CI: `workflow_dispatch` with `integration: true` → `make -C devshard ci-testen
 | **S6** | versiond stop | Sticky routing when one versiond is stopped | `TestS6_VersiondStop` |
 
 Source: `devshard/testenv/citest/s{1..6}_*.go`.
+
+### Phase 12 transport scenarios (gRPC-only gateway)
+
+Full plan: [`chain-transport-consolidation.md`](./chain-transport-consolidation.md).
+
+| ID | Name | What we validate | Test | Status |
+|----|------|------------------|------|--------|
+| **G1** | gRPC escrow create | devshardctl creates escrow via `common/chain/tx` + mock-chain gRPC; escrow visible on gRPC `DevshardEscrow` query | `TestG1_GatewayEscrowCreateGRPC` | ✅ |
+| **G2** | gRPC escrow read | Gateway reads escrow fields via gRPC bridge (no `RESTBridge` / LCD) | `TestG2_GatewayEscrowReadGRPC` | ✅ |
+| **G3** | Chat without LCD | Same as S5 but compose omits `DEVSHARD_CHAIN_REST` and `DEVSHARD_TX_QUERY_REST` for gateway | `TestG3_GatewayChatGRPCOnly` | ✅ |
+| **G4** | REST removed gate | Static test: no `NewRESTBridge` / `RESTChainTxClient` in devshardctl | `TestG4_NoRESTChainClientsInGatewayProduction` | ✅ |
+
+Run: `make citest-grpc-transport` from `devshard/testenv/`.
 
 ---
 
@@ -161,8 +174,9 @@ sticky versiond-router to devshardd, which calls mock-openai — **non-stream an
 
 On failure, dumps logs for `devshardctl`, `versiond-0`, `versiond-1`, `mock-openai`.
 
-**Pass criteria:** Both stream modes return 200 with expected mock-openai payload. Requires
-mock-chain LCD REST (3c) for gateway escrow tx and mock-dapi ML handoff.
+**Pass criteria:** Both stream modes return 200 with expected mock-openai payload. Escrow
+create/settle uses mock-chain gRPC only (see **G3** in
+[`chain-transport-consolidation.md`](./chain-transport-consolidation.md)).
 
 ---
 
@@ -190,6 +204,7 @@ surviving session keeps working. Documents **no transparent failover** for pinne
 
 | Suite | Command | Scenarios |
 |-------|---------|-----------|
+| gRPC transport | `make citest-grpc-transport` | G1–G4 ✅ ([`chain-transport-consolidation.md`](./chain-transport-consolidation.md)) |
 | Adversarial | `make citest-adversarial` | A1–A4 (fault injection on mock-openai / mock-chain) |
 | Observability | `make citest-observability` | O1 Jaeger + Loki + Prometheus smoke |
 | Gateway smoke | `TESTENV_GATEWAY_SMOKE=1` | Phase 7 wiring without full citest tag |
@@ -204,3 +219,45 @@ See [`README.md`](../README.md) for adversarial and observability detail.
 | **S8** | Router host drain | Phase 13 — upstream evacuation |
 
 Tracked in [`testenv-v2-plan.md`](./testenv-v2-plan.md) § Phase 13.
+
+---
+
+## G1 — gRPC escrow create ✅
+
+**What we test:** `common/chain/tx` creates a devshard escrow via mock-chain gRPC
+(`BroadcastTx` + `GetTx` + auth `Account` query) — no LCD for the tx path.
+
+**How:** `TestG1_GatewayEscrowCreateGRPC` boots S1 stack, dials mock-chain gRPC,
+calls `chaintx.CreateDevshardEscrow`, queries `DevshardEscrow` on gRPC.
+
+**Run:** `make citest-grpc-transport` (or `-run TestG1_`).
+
+---
+
+## G2 — gRPC escrow read ✅
+
+**What we test:** Escrow read via `bridge.GRPCBridge` / `common/chain.Client` against dockerized mock-chain (no LCD).
+
+**Test:** `TestG2_GatewayEscrowReadGRPC` — boots mock-chain only, reads escrow `1` via gRPC.
+
+---
+
+## G3 — Gateway chat without LCD ✅
+
+**What we test:** S5-equivalent chat (non-stream + SSE) with gRPC-only gateway chain transport.
+
+**How:** `TestG3_GatewayChatGRPCOnly` — full S1 stack with `docker compose up --build`; compose gate asserts no `DEVSHARD_CHAIN_REST` / `DEVSHARD_TX_QUERY_REST` on devshardctl.
+
+**Pass criteria:** Non-stream + stream chat return 200.
+
+**Run:** `make citest-grpc-transport` (or `-run TestG3_`).
+
+---
+
+## G4 — REST removed gate ✅
+
+**What we test:** Production gateway code must not call REST chain clients.
+
+**How:** `TestG4_NoRESTChainClientsInGatewayProduction` scans non-test `.go` files in `devshard/cmd/devshardctl` (excluding legacy `chain_tx_rest*.go`).
+
+**Pass criteria:** Test fails if `NewRESTBridge` or `NewRESTChainTxClient` appear in production paths.

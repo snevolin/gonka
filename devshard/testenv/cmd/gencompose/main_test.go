@@ -146,7 +146,7 @@ grantees:
 	require.Equal(t, "gonka-roundtrip", st.GetChainID())
 	require.Equal(t, cfg.User.Address, st.Escrows[1].Creator)
 
-	srv, lis, err := grpcface.NewInProcessServer(st)
+	srv, lis, err := grpcface.NewInProcessServer(grpcface.Deps{Store: st})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		srv.Stop()
@@ -216,7 +216,12 @@ func TestWriteCompose_MockChainService(t *testing.T) {
 	require.Contains(t, text, "DEVSHARD_ESCROW_ID")
 	require.Contains(t, text, "DEVSHARD_PUBLIC_API")
 	require.Contains(t, text, "DEVSHARD_CHAIN_GRPC")
-	require.Contains(t, text, "DEVSHARD_TX_QUERY_REST")
+	require.Contains(t, text, "DEVSHARD_NODE_MANAGER_ADDR")
+	require.NotContains(t, text, "DEVSHARD_TX_QUERY_REST")
+	require.NotContains(t, text, "DEVSHARD_CHAIN_REST:")
+	require.NotContains(t, text, "MOCK_CHAIN_REST")
+	require.NotContains(t, text, ":1317")
+	require.Contains(t, text, "/health")
 	require.Contains(t, text, "DEVSHARD_MODEL")
 	require.Contains(t, text, "/v1/status")
 }

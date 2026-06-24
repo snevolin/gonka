@@ -98,10 +98,9 @@ type EpochGroupBinding struct {
 
 // MockChainCfg is the listen addresses of cmd/mockchain.
 type MockChainCfg struct {
-	GRPCPort     int    `yaml:"grpc_port"`
-	RPCPort      int    `yaml:"rpc_port"`
-	RESTPort     int    `yaml:"rest_port"`
-	TestenvPort  int    `yaml:"testenv_port"`
+	GRPCPort    int    `yaml:"grpc_port"`
+	RPCPort     int    `yaml:"rpc_port"`
+	TestenvPort int    `yaml:"testenv_port"`
 	Host         string `yaml:"host"`
 }
 
@@ -196,7 +195,6 @@ const (
 	DefaultBlockHeight       = int64(150)
 	DefaultMockChainGRPCPort = 9090
 	DefaultMockChainRPCPort  = 26657
-	DefaultMockChainRESTPort = 1317
 	DefaultMockChainTestenvPort = 9191
 	DefaultMockChainHost     = "mock-chain"
 	DefaultMockDapiGRPCPort  = 9400
@@ -295,9 +293,6 @@ func (c *File) ApplyDefaults() {
 	}
 	if c.MockChain.RPCPort == 0 {
 		c.MockChain.RPCPort = DefaultMockChainRPCPort
-	}
-	if c.MockChain.RESTPort == 0 {
-		c.MockChain.RESTPort = DefaultMockChainRESTPort
 	}
 	if c.MockChain.Host == "" {
 		c.MockChain.Host = DefaultMockChainHost

@@ -22,7 +22,7 @@ import (
 
 func startTestServer(t *testing.T, st *store.Store) *chain.Client {
 	t.Helper()
-	srv, lis, err := grpcface.NewInProcessServer(st)
+	srv, lis, err := grpcface.NewInProcessServer(grpcface.Deps{Store: st})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		srv.Stop()

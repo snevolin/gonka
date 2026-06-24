@@ -282,11 +282,11 @@ func (g *Gateway) createRotationEscrow(ctx context.Context, settings GatewaySett
 	if err != nil {
 		return nil, err
 	}
-	txClient, err := newGatewayRESTChainTxClient(settings, "", "", 0, 0)
+	txMgr, err := g.newChainTxManager(settings, "", "", 0, 0)
 	if err != nil {
 		return nil, err
 	}
-	result, err := txClient.CreateDevshardEscrow(ctx, signer, model.Amount, model.ModelID)
+	result, err := txMgr.CreateDevshardEscrow(ctx, signer, model.Amount, model.ModelID)
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +304,7 @@ func (g *Gateway) createRotationEscrow(ctx context.Context, settings GatewaySett
 		return nil, err
 	}
 	log.Printf("escrow_rotation_created role=%s epoch=%d model=%q escrow=%d tx_hash=%s", role, epoch, model.ModelID, result.EscrowID, result.TxHash)
-	return result, nil
+	return createEscrowResultFromTx(result), nil
 }
 
 func normalizedEscrowRotationModels(settings GatewaySettings) []EscrowRotationModelSettings {
@@ -427,18 +427,23 @@ func (g *Gateway) settleDevshardOnChain(ctx context.Context, id string, req admi
 	g.mu.Lock()
 	settings := g.settings
 	g.mu.Unlock()
-	txClient, err := newGatewayRESTChainTxClient(settings, req.ChainID, req.FeeDenom, req.FeeAmount, req.GasLimit)
+	txMgr, err := g.newChainTxManager(settings, req.ChainID, req.FeeDenom, req.FeeAmount, req.GasLimit)
 	if err != nil {
-		log.Printf("devshard_settle_failed escrow=%s stage=tx_client chain_rest=%q error=%q", id, settings.ChainREST, err.Error())
+		log.Printf("devshard_settle_failed escrow=%s stage=tx_client error=%q", id, err.Error())
 		return nil, err
 	}
-	log.Printf("devshard_settle_broadcast_start escrow=%s chain_rest=%q chain_id_override=%q gas_limit=%d fee_denom=%q fee_amount=%d",
-		id, settings.ChainREST, req.ChainID, req.GasLimit, req.FeeDenom, req.FeeAmount)
-	result, err := txClient.SettleDevshardEscrow(ctx, signer, settlement)
+	params, err := settleParamsFromJSON(settlement)
 	if err != nil {
-		log.Printf("devshard_settle_failed escrow=%s stage=broadcast chain_rest=%q error=%q", id, settings.ChainREST, err.Error())
+		log.Printf("devshard_settle_failed escrow=%s stage=settlement_encode error=%q", id, err.Error())
+		return nil, err
+	}
+	log.Printf("devshard_settle_broadcast_start escrow=%s chain_id_override=%q gas_limit=%d fee_denom=%q fee_amount=%d",
+		id, req.ChainID, req.GasLimit, req.FeeDenom, req.FeeAmount)
+	result, err := txMgr.SettleDevshardEscrow(ctx, signer, params)
+	if err != nil {
+		log.Printf("devshard_settle_failed escrow=%s stage=broadcast error=%q", id, err.Error())
 		return nil, err
 	}
 	log.Printf("devshard_settle_submitted escrow=%s tx_hash=%s settler=%s", id, result.TxHash, result.Settler)
-	return result, nil
+	return settleEscrowResultFromTx(result), nil
 }

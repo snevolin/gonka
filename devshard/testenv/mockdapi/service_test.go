@@ -35,7 +35,7 @@ func startBed(t *testing.T) testBed {
 	ctx, cancel := context.WithCancel(context.Background())
 	st := seed.Defaults()
 
-	grpcSrv, grpcLis, err := grpcface.NewInProcessServer(st)
+	grpcSrv, grpcLis, err := grpcface.NewInProcessServer(grpcface.Deps{Store: st})
 	require.NoError(t, err)
 
 	admin := adminface.NewServer(st, nil, nil)
@@ -44,7 +44,8 @@ func startBed(t *testing.T) testBed {
 	cfg := mockdapi.DefaultConfig()
 	cfg.ChainGRPCAddr = grpcLis.Addr().String()
 	cfg.ChainTestenvURL = adminHTTP.URL
-	cfg.ChainPollInterval = 20 * time.Millisecond
+	// Disable background poll; tests drive RefreshRuntimeConfig explicitly via /testenv/*.
+	cfg.ChainPollInterval = time.Hour
 	cfg.BlockInterval = 50 * time.Millisecond
 
 	svc, err := mockdapi.New(ctx, cfg)

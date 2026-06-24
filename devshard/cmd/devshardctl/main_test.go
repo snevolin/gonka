@@ -63,7 +63,7 @@ func TestBuildGatewayRuntimesDeactivatesMissingEscrow(t *testing.T) {
 		gatewayRuntimeBuilder = savedBuilder
 	})
 
-	runtimes, err := buildGatewayRuntimes(store, &state, t.TempDir(), NewPerfTracker(nil))
+	runtimes, err := buildGatewayRuntimes(store, &state, t.TempDir(), NewPerfTracker(nil), dialTestChainGRPC(t))
 	require.NoError(t, err)
 	require.Len(t, runtimes, 1)
 	require.Equal(t, "24", runtimes[0].id)
@@ -115,7 +115,7 @@ func TestBuildGatewayRuntimesDeactivatesMissingPrivateKey(t *testing.T) {
 		gatewayRuntimeBuilder = savedBuilder
 	})
 
-	runtimes, err := buildGatewayRuntimes(store, &state, t.TempDir(), NewPerfTracker(nil))
+	runtimes, err := buildGatewayRuntimes(store, &state, t.TempDir(), NewPerfTracker(nil), dialTestChainGRPC(t))
 	require.NoError(t, err)
 	require.Len(t, runtimes, 1)
 	require.Equal(t, "24", runtimes[0].id)
@@ -159,7 +159,7 @@ func TestBuildGatewayRuntimesPreservesActiveOnOtherErrors(t *testing.T) {
 		gatewayRuntimeBuilder = savedBuilder
 	})
 
-	_, err = buildGatewayRuntimes(store, &state, t.TempDir(), NewPerfTracker(nil))
+	_, err = buildGatewayRuntimes(store, &state, t.TempDir(), NewPerfTracker(nil), dialTestChainGRPC(t))
 	require.Error(t, err)
 
 	reloaded, ok, err := store.LoadState()
@@ -176,7 +176,7 @@ func TestRepairPersistedGatewayEndpointSettingsBackfillsBlankPublicAPI(t *testin
 	})
 
 	require.NoError(t, store.Initialize(GatewaySettings{
-		ChainREST:               "http://node:1317",
+		ChainGRPC:               "",
 		PublicAPI:               "",
 		DefaultModel:            "Qwen/Test",
 		DefaultRequestMaxTokens: 1000,
@@ -188,17 +188,20 @@ func TestRepairPersistedGatewayEndpointSettingsBackfillsBlankPublicAPI(t *testin
 	require.True(t, ok)
 
 	t.Setenv("DEVSHARD_PUBLIC_API", "http://api:9000")
+	t.Setenv("DEVSHARD_CHAIN_GRPC", "mock-chain:19090")
 	mustRepairPersistedGatewayEndpointSettings(store, &state, cliFlags{
-		chainREST: defaultChainRESTURL,
+		chainGRPC: defaultChainGRPCURL,
 		publicAPI: defaultPublicAPIURL,
 	})
 
 	require.Equal(t, "http://api:9000", state.Settings.PublicAPI)
+	require.Equal(t, "mock-chain:19090", state.Settings.ChainGRPC)
 
 	reloaded, ok := reloadGatewayStateForTest(t, store)
 	require.True(t, ok)
 	require.Equal(t, "http://api:9000", reloaded.Settings.PublicAPI)
-	require.Equal(t, "http://node:1317", reloaded.Settings.ChainREST)
+	// chain_grpc is runtime-only until gateway.db schema migration; startup uses env/flags.
+	require.Empty(t, reloaded.Settings.ChainGRPC)
 }
 
 func TestRepairPersistedGatewayEndpointSettingsPreservesConfiguredPublicAPI(t *testing.T) {
@@ -222,7 +225,6 @@ func TestRepairPersistedGatewayEndpointSettingsPreservesConfiguredPublicAPI(t *t
 
 	t.Setenv("DEVSHARD_PUBLIC_API", "http://env-api:9000")
 	mustRepairPersistedGatewayEndpointSettings(store, &state, cliFlags{
-		chainREST: defaultChainRESTURL,
 		publicAPI: defaultPublicAPIURL,
 	})
 

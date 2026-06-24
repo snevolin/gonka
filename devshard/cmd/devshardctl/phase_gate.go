@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"common/chain"
+
+	inferencetypes "github.com/productscience/inference/x/inference/types"
 )
 
 const (
@@ -65,6 +70,8 @@ type ChainPhaseGate struct {
 	// scaleApplyHook's responsibility.
 	capacityState  *CapacityState
 	scaleApplyHook func(scale float64)
+
+	chainQuery chain.InferenceClient
 
 	stopCh chan struct{}
 	doneCh chan struct{}
@@ -252,17 +259,18 @@ func NewChainPhaseGate(baseURL string, pollInterval time.Duration) *ChainPhaseGa
 	}
 }
 
-func (g *ChainPhaseGate) SetPreservedSnapshotBaseURL(baseURL string) {
+func (g *ChainPhaseGate) SetChainQueryClient(client chain.InferenceClient) {
 	if g == nil {
-		return
-	}
-	baseURL = strings.TrimSpace(baseURL)
-	if baseURL == "" {
 		return
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.preservedSnapshotEndpoint = strings.TrimRight(baseURL, "/") + "/productscience/inference/inference/preserved_nodes_snapshot"
+	g.chainQuery = client
+}
+
+// SetPreservedSnapshotBaseURL is deprecated; preserved snapshots are fetched via gRPC.
+func (g *ChainPhaseGate) SetPreservedSnapshotBaseURL(baseURL string) {
+	_ = baseURL
 }
 
 func (g *ChainPhaseGate) Start() {
@@ -572,41 +580,56 @@ func (g *ChainPhaseGate) preservedSnapshotURL() string {
 }
 
 func (g *ChainPhaseGate) fetchPreservedSnapshotState(expectedAnchor int64) (*preservedSnapshotState, preservedSnapshotStatus, error) {
-	endpoint := g.preservedSnapshotURL()
-	if endpoint == "" {
+	qc := g.chainQueryClient()
+	if qc == nil {
 		return nil, preservedSnapshotUnavailable, nil
 	}
-	resp, err := g.client.Get(endpoint)
+	resp, err := qc.PreservedNodesSnapshot(context.Background(), &inferencetypes.QueryPreservedNodesSnapshotRequest{})
 	if err != nil {
 		return nil, preservedSnapshotUnavailable, err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNotImplemented {
-		io.Copy(io.Discard, resp.Body)
-		return nil, preservedSnapshotUnavailable, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body)
-		return nil, preservedSnapshotUnavailable, fmt.Errorf("preserved snapshot status %d", resp.StatusCode)
-	}
-
-	var payload chainPreservedNodesSnapshotResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, preservedSnapshotUnavailable, err
-	}
-	if !payload.Found || payload.Snapshot == nil {
+	if resp == nil || !resp.Found || resp.Snapshot == nil {
 		return nil, preservedSnapshotMissingCurrent, nil
 	}
-	if expectedAnchor > 0 && int64(payload.Snapshot.EpisodeAnchorHeight) != expectedAnchor {
+	snapshot := preservedSnapshotFromProto(resp.Snapshot)
+	if expectedAnchor > 0 && int64(snapshot.EpisodeAnchorHeight) != expectedAnchor {
 		log.Printf(
 			"chain phase gate: preserved snapshot anchor mismatch expected=%d actual=%d",
 			expectedAnchor,
-			payload.Snapshot.EpisodeAnchorHeight,
+			snapshot.EpisodeAnchorHeight,
 		)
 		return nil, preservedSnapshotMissingCurrent, nil
 	}
-	return newPreservedSnapshotState(payload.Snapshot), preservedSnapshotCurrent, nil
+	return newPreservedSnapshotState(snapshot), preservedSnapshotCurrent, nil
+}
+
+func (g *ChainPhaseGate) chainQueryClient() chain.InferenceClient {
+	if g == nil {
+		return nil
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.chainQuery
+}
+
+func preservedSnapshotFromProto(snapshot *inferencetypes.PreservedNodesSnapshot) *chainPreservedNodesSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	out := &chainPreservedNodesSnapshot{
+		EpisodeAnchorHeight: jsonInt64(snapshot.EpisodeAnchorHeight),
+	}
+	for _, modelNodes := range snapshot.GetModelPreservedNodes() {
+		entry := chainModelPreservedNodes{ModelID: modelNodes.GetModelId()}
+		for _, participant := range modelNodes.GetParticipants() {
+			entry.Participants = append(entry.Participants, chainParticipantPreservedNodes{
+				ParticipantID: participant.GetParticipantId(),
+				NodeIDs:       append([]string(nil), participant.GetNodeIds()...),
+			})
+		}
+		out.ModelPreservedNodes = append(out.ModelPreservedNodes, entry)
+	}
+	return out
 }
 
 func newPreservedSnapshotState(snapshot *chainPreservedNodesSnapshot) *preservedSnapshotState {

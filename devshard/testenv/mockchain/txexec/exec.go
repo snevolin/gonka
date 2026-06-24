@@ -1,4 +1,4 @@
-package restface
+package txexec
 
 import (
 	"fmt"
@@ -11,48 +11,52 @@ import (
 	"devshard/testenv/mockchain/store"
 )
 
-type txExecResult struct {
-	events   []storedEvent
-	signer   string
-	escrowID uint64
-}
-
-type storedEvent struct {
+// Event is a Cosmos-style event emitted by mock-chain tx execution.
+type Event struct {
 	Type       string
-	Attributes []storedAttribute
+	Attributes []Attribute
 }
 
-type storedAttribute struct {
+// Attribute is one key/value on an Event.
+type Attribute struct {
 	Key   string
 	Value string
 }
 
-func execMessages(st *store.Store, rpc *rpcface.Service, msgs []decodedMsg) (txExecResult, error) {
+// Result is the outcome of executing one signed tx.
+type Result struct {
+	Events   []Event
+	Signer   string
+	EscrowID uint64
+}
+
+// ExecMessages runs supported inference messages against the mock chain store.
+func ExecMessages(st *store.Store, rpc *rpcface.Service, msgs []DecodedMsg) (Result, error) {
 	if len(msgs) != 1 {
-		return txExecResult{}, fmt.Errorf("mock-chain accepts exactly one message per tx, got %d", len(msgs))
+		return Result{}, fmt.Errorf("mock-chain accepts exactly one message per tx, got %d", len(msgs))
 	}
 	msg := msgs[0]
 	switch {
-	case msg.create != nil:
-		return execCreate(st, rpc, msg.create)
-	case msg.settle != nil:
-		return execSettle(st, rpc, msg.settle)
+	case msg.Create != nil:
+		return execCreate(st, rpc, msg.Create)
+	case msg.Settle != nil:
+		return execSettle(st, rpc, msg.Settle)
 	default:
-		return txExecResult{}, fmt.Errorf("empty decoded message")
+		return Result{}, fmt.Errorf("empty decoded message")
 	}
 }
 
-func execCreate(st *store.Store, rpc *rpcface.Service, msg *inferencetypes.MsgCreateDevshardEscrow) (txExecResult, error) {
+func execCreate(st *store.Store, rpc *rpcface.Service, msg *inferencetypes.MsgCreateDevshardEscrow) (Result, error) {
 	creator := strings.TrimSpace(msg.GetCreator())
 	if creator == "" {
-		return txExecResult{}, fmt.Errorf("creator is required")
+		return Result{}, fmt.Errorf("creator is required")
 	}
 	if msg.GetAmount() == 0 {
-		return txExecResult{}, fmt.Errorf("amount is required")
+		return Result{}, fmt.Errorf("amount is required")
 	}
 	modelID := strings.TrimSpace(msg.GetModelId())
 	if modelID == "" {
-		return txExecResult{}, fmt.Errorf("model_id is required")
+		return Result{}, fmt.Errorf("model_id is required")
 	}
 
 	id := st.AllocateEscrowID()
@@ -60,13 +64,13 @@ func execCreate(st *store.Store, rpc *rpcface.Service, msg *inferencetypes.MsgCr
 	escrow := buildEscrowFromTemplate(st, id, creator, msg.GetAmount(), modelID, epoch.Index)
 	st.PutEscrow(escrow)
 	if err := rpc.PublishEscrowCreated(id); err != nil {
-		return txExecResult{}, err
+		return Result{}, err
 	}
 	st.IncrementSequence(creator)
 
-	events := []storedEvent{{
+	events := []Event{{
 		Type: "devshard_escrow_created",
-		Attributes: []storedAttribute{
+		Attributes: []Attribute{
 			{Key: "escrow_id", Value: strconv.FormatUint(id, 10)},
 			{Key: "creator", Value: creator},
 			{Key: "amount", Value: strconv.FormatUint(msg.GetAmount(), 10)},
@@ -74,32 +78,32 @@ func execCreate(st *store.Store, rpc *rpcface.Service, msg *inferencetypes.MsgCr
 			{Key: "model_id", Value: modelID},
 		},
 	}}
-	return txExecResult{events: events, signer: creator, escrowID: id}, nil
+	return Result{Events: events, Signer: creator, EscrowID: id}, nil
 }
 
-func execSettle(st *store.Store, rpc *rpcface.Service, msg *inferencetypes.MsgSettleDevshardEscrow) (txExecResult, error) {
+func execSettle(st *store.Store, rpc *rpcface.Service, msg *inferencetypes.MsgSettleDevshardEscrow) (Result, error) {
 	settler := strings.TrimSpace(msg.GetSettler())
 	if settler == "" {
-		return txExecResult{}, fmt.Errorf("settler is required")
+		return Result{}, fmt.Errorf("settler is required")
 	}
 	id := msg.GetEscrowId()
 	if id == 0 {
-		return txExecResult{}, fmt.Errorf("escrow_id is required")
+		return Result{}, fmt.Errorf("escrow_id is required")
 	}
 	if !st.MarkEscrowSettled(id) {
-		return txExecResult{}, fmt.Errorf("escrow %d not found", id)
+		return Result{}, fmt.Errorf("escrow %d not found", id)
 	}
 	fees := msg.GetFees()
 	totalPayout := fees
 	remainder := uint64(0)
 	if err := rpc.PublishEscrowSettled(id, settler, totalPayout, fees, remainder); err != nil {
-		return txExecResult{}, err
+		return Result{}, err
 	}
 	st.IncrementSequence(settler)
 
-	events := []storedEvent{{
+	events := []Event{{
 		Type: "devshard_escrow_settled",
-		Attributes: []storedAttribute{
+		Attributes: []Attribute{
 			{Key: "escrow_id", Value: strconv.FormatUint(id, 10)},
 			{Key: "settler", Value: settler},
 			{Key: "total_payout", Value: strconv.FormatUint(totalPayout, 10)},
@@ -107,7 +111,7 @@ func execSettle(st *store.Store, rpc *rpcface.Service, msg *inferencetypes.MsgSe
 			{Key: "remainder", Value: strconv.FormatUint(remainder, 10)},
 		},
 	}}
-	return txExecResult{events: events, signer: settler, escrowID: id}, nil
+	return Result{Events: events, Signer: settler, EscrowID: id}, nil
 }
 
 func buildEscrowFromTemplate(st *store.Store, id uint64, creator string, amount uint64, modelID string, epochIndex uint64) *inferencetypes.DevshardEscrow {

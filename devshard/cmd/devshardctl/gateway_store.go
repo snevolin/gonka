@@ -11,7 +11,8 @@ import (
 )
 
 type GatewaySettings struct {
-	ChainREST                      string                      `json:"chain_rest"`
+	ChainREST                      string                      `json:"chain_rest"` // deprecated: ignored for chain I/O
+	ChainGRPC                      string                      `json:"chain_grpc,omitempty"`
 	PublicAPI                      string                      `json:"public_api"`
 	DefaultModel                   string                      `json:"default_model"`
 	DefaultRequestMaxTokens        uint64                      `json:"default_request_max_tokens"`

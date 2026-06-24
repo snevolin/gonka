@@ -451,7 +451,9 @@ func TestChainPhaseGateUsesPreservedSnapshotDuringPoC(t *testing.T) {
 
 	gate := NewChainPhaseGate(server.URL, 0)
 	require.NotNil(t, gate)
-	gate.SetPreservedSnapshotBaseURL(server.URL)
+	gate.SetChainQueryClient(&preservedSnapshotStub{
+		snapshotResp: preservedSnapshotGRPCResponse(123, "Model/A", "gonka1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1", []string{"node-b"}),
+	})
 
 	state, err := gate.fetchParticipantsState(true, 123, false)
 	require.NoError(t, err)
@@ -525,7 +527,7 @@ func TestChainPhaseGateFallsBackToTimeslotAllocationWhenPreservedSnapshotMissing
 
 	gate := NewChainPhaseGate(server.URL, 0)
 	require.NotNil(t, gate)
-	gate.SetPreservedSnapshotBaseURL(server.URL)
+	gate.SetChainQueryClient(&preservedSnapshotStub{})
 
 	state, err := gate.fetchParticipantsState(true, 0, false)
 	require.NoError(t, err)
@@ -583,7 +585,9 @@ func TestChainPhaseGateIgnoresStalePreservedSnapshot(t *testing.T) {
 
 	gate := NewChainPhaseGate(server.URL, 0)
 	require.NotNil(t, gate)
-	gate.SetPreservedSnapshotBaseURL(server.URL)
+	gate.SetChainQueryClient(&preservedSnapshotStub{
+		snapshotResp: preservedSnapshotGRPCResponse(122, "Model/A", "gonka1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1", []string{"node-a"}),
+	})
 
 	state, err := gate.fetchParticipantsState(true, 123, false)
 	require.NoError(t, err)
@@ -625,7 +629,7 @@ func TestChainPhaseGateKeepsAllParticipantsAvailableDuringConfirmationGraceBefor
 
 	gate := NewChainPhaseGate(server.URL, 0)
 	require.NotNil(t, gate)
-	gate.SetPreservedSnapshotBaseURL(server.URL)
+	gate.SetChainQueryClient(&preservedSnapshotStub{})
 
 	state, err := gate.fetchParticipantsState(true, 123, true)
 	require.NoError(t, err)

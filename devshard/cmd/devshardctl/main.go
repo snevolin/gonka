@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"common/chain"
 	"devshard/bridge"
 	"devshard/state"
 	"devshard/types"
@@ -23,7 +24,6 @@ type adminAuthContextKey struct{}
 type adminAPIKeySuffixContextKey struct{}
 
 const (
-	defaultChainRESTURL          = "http://localhost:1317"
 	defaultChainGRPCURL          = "localhost:9090"
 	defaultPublicAPIURL          = "http://localhost:9000"
 	defaultModelName             = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
@@ -64,7 +64,6 @@ var Version = "dev"
 
 type cliFlags struct {
 	escrowID    string
-	chainREST   string
 	chainGRPC   string
 	publicAPI   string
 	model       string
@@ -92,7 +91,7 @@ const (
 type bootstrapOptions struct {
 	escrowID          string
 	privateKeyHex     string
-	chainREST         string
+	chainGRPC         string
 	publicAPI         string
 	defaultModel      string
 	storagePath       string
@@ -128,7 +127,7 @@ func main() {
 
 	mustLoadParticipantThrottleState(gatewayStore)
 
-	gateway := mustBuildGateway(gatewayStore, gatewayState, runtimeOpts.baseStorageDir)
+	gateway := mustBuildGateway(gatewayStore, gatewayState, runtimeOpts.baseStorageDir, flags)
 	defer gateway.Close()
 
 	handler := buildGatewayHandler(gateway, runtimeOpts)
@@ -154,7 +153,7 @@ func mustLoadBootstrapOptions(flags cliFlags, baseStorageDir string) bootstrapOp
 		multiMode:      strings.TrimSpace(os.Getenv("DEVSHARDS_JSON")) != "",
 		escrowID:       firstNonEmpty(flags.escrowID, os.Getenv("DEVSHARD_ESCROW_ID")),
 		privateKeyHex:  firstNonEmpty(flags.privateKey, os.Getenv("DEVSHARD_PRIVATE_KEY")),
-		chainREST:      envOverride(flags.chainREST, os.Getenv("DEVSHARD_CHAIN_REST"), defaultChainRESTURL),
+		chainGRPC:      effectiveChainGRPC(flags, ""),
 		publicAPI:      envOverride(flags.publicAPI, os.Getenv("DEVSHARD_PUBLIC_API"), defaultPublicAPIURL),
 		defaultModel:   envOverride(flags.model, os.Getenv("DEVSHARD_MODEL"), defaultModelName),
 		storagePath:    firstNonEmpty(flags.storagePath, os.Getenv("DEVSHARD_STORAGE_PATH")),
@@ -168,7 +167,7 @@ func mustLoadBootstrapOptions(flags cliFlags, baseStorageDir string) bootstrapOp
 		opts.storagePath = defaultStoragePath(opts.baseStorageDir, opts.escrowID)
 	}
 	opts.bootstrapSettings = GatewaySettings{
-		ChainREST:                      opts.chainREST,
+		ChainGRPC:                      effectiveChainGRPC(flags, ""),
 		PublicAPI:                      opts.publicAPI,
 		DefaultModel:                   opts.defaultModel,
 		DefaultRequestMaxTokens:        uint64(readInt64Env("GATEWAY_DEFAULT_MAX_TOKENS", int64(DefaultRequestMaxTokens))),
@@ -208,8 +207,7 @@ func mustReadEscrowRotationModelsEnv() []EscrowRotationModelSettings {
 func parseCLIFlags() cliFlags {
 	fs := flag.NewFlagSet("devshardctl", flag.ExitOnError)
 	escrowID := fs.String("escrow-id", "", "escrow ID (required, or DEVSHARD_ESCROW_ID env)")
-	chainREST := fs.String("chain-rest", defaultChainRESTURL, "chain REST API URL (tx broadcast)")
-	chainGRPC := fs.String("chain-grpc", defaultChainGRPCURL, "chain gRPC URL (params/epoch queries)")
+	chainGRPC := fs.String("chain-grpc", defaultChainGRPCURL, "chain gRPC URL (queries and tx)")
 	publicAPI := fs.String("public-api", defaultPublicAPIURL, "public API URL used for epoch/PoC phase checks")
 	model := fs.String("model", defaultModelName, "default model name")
 	port := fs.String("port", defaultListenPort, "listen port")
@@ -221,7 +219,6 @@ func parseCLIFlags() cliFlags {
 	}
 	return cliFlags{
 		escrowID:    *escrowID,
-		chainREST:   *chainREST,
 		chainGRPC:   *chainGRPC,
 		publicAPI:   *publicAPI,
 		model:       *model,
@@ -296,8 +293,8 @@ func mustRepairPersistedGatewayEndpointSettings(gatewayStore *GatewayStore, gate
 	}
 	settings := gatewayState.Settings
 	changed := false
-	if strings.TrimSpace(settings.ChainREST) == "" {
-		settings.ChainREST = envOverride(flags.chainREST, os.Getenv("DEVSHARD_CHAIN_REST"), defaultChainRESTURL)
+	if strings.TrimSpace(settings.ChainGRPC) == "" {
+		settings.ChainGRPC = effectiveChainGRPC(flags, "")
 		changed = true
 	}
 	if strings.TrimSpace(settings.PublicAPI) == "" {
@@ -311,7 +308,7 @@ func mustRepairPersistedGatewayEndpointSettings(gatewayStore *GatewayStore, gate
 		log.Fatalf("repair persisted gateway endpoints: %v", err)
 	}
 	gatewayState.Settings = settings
-	log.Printf("repaired persisted gateway endpoint settings chain_rest=%q public_api=%q", settings.ChainREST, settings.PublicAPI)
+	log.Printf("repaired persisted gateway endpoint settings chain_grpc=%q public_api=%q", settings.ChainGRPC, settings.PublicAPI)
 }
 
 func mustBootstrapGatewayState(gatewayStore *GatewayStore, opts bootstrapOptions) {
@@ -343,11 +340,27 @@ func resolveChainGRPCURL() string {
 	)
 }
 
-func mustBuildGateway(gatewayStore *GatewayStore, gatewayState GatewayState, baseStorageDir string) *Gateway {
+// effectiveChainGRPC mirrors public-api envOverride: compose env wins over the
+// --chain-grpc flag default (localhost:9090) for container entrypoints.
+func effectiveChainGRPC(flags cliFlags, persisted string) string {
+	envVal := firstNonEmpty(os.Getenv("DEVSHARD_CHAIN_GRPC"), os.Getenv("NODE_GRPC_URL"))
+	if strings.TrimSpace(persisted) != "" && persisted != defaultChainGRPCURL {
+		return strings.TrimSpace(persisted)
+	}
+	return envOverride(flags.chainGRPC, envVal, defaultChainGRPCURL)
+}
+
+func mustBuildGateway(gatewayStore *GatewayStore, gatewayState GatewayState, baseStorageDir string, flags cliFlags) *Gateway {
 	gatewayState.Settings = gatewayState.Settings.WithTuningDefaults()
+	gatewayState.Settings.ChainGRPC = effectiveChainGRPC(flags, gatewayState.Settings.ChainGRPC)
 	DefaultRequestMaxTokens = gatewayState.Settings.DefaultRequestMaxTokens
 	RequestMaxTokensCap = gatewayState.Settings.RequestMaxTokensCap
 	applyGatewayTuningSettings(gatewayState.Settings)
+
+	chainClient, err := chain.New(gatewayState.Settings.ChainGRPC)
+	if err != nil {
+		log.Fatalf("dial chain gRPC %s: %v", gatewayState.Settings.ChainGRPC, err)
+	}
 
 	perfStore, err := NewPerfStore(filepath.Join(baseStorageDir, "perf.db"))
 	if err != nil {
@@ -357,11 +370,10 @@ func mustBuildGateway(gatewayStore *GatewayStore, gatewayState GatewayState, bas
 
 	runtimeParams, runtimeParamsClose := mustInitGatewayRuntimeParams(
 		context.Background(),
-		gatewayState.Settings.ChainREST,
-		resolveChainGRPCURL(),
+		gatewayState.Settings.ChainGRPC,
 	)
 
-	runtimes, err := buildGatewayRuntimes(gatewayStore, &gatewayState, baseStorageDir, perf)
+	runtimes, err := buildGatewayRuntimes(gatewayStore, &gatewayState, baseStorageDir, perf, chainClient)
 	if err != nil {
 		runtimeParamsClose()
 		perfStore.Close()
@@ -376,14 +388,14 @@ func mustBuildGateway(gatewayStore *GatewayStore, gatewayState GatewayState, bas
 		gatewayState.Settings.MaxInputTokensInFlight,
 		gatewayState.Settings.ModelLimits,
 	)
-	gateway := NewManagedGateway(runtimes, limiter, gatewayState.Settings, baseStorageDir, gatewayStore, perf)
+	gateway := NewManagedGateway(runtimes, limiter, gatewayState.Settings, baseStorageDir, gatewayStore, chainClient, perf)
 	gateway.perfStore = perfStore
 	gateway.runtimeParams = runtimeParams
 	gateway.runtimeParamsClose = runtimeParamsClose
 	return gateway
 }
 
-func buildGatewayRuntimes(gatewayStore *GatewayStore, gatewayState *GatewayState, baseStorageDir string, perf *PerfTracker) ([]*devshardRuntime, error) {
+func buildGatewayRuntimes(gatewayStore *GatewayStore, gatewayState *GatewayState, baseStorageDir string, perf *PerfTracker, chainClient *chain.Client) ([]*devshardRuntime, error) {
 	// Load ALL devshards (active and inactive) so that inactive ones
 	// remain accessible for finalization, debug, and settlement retrieval.
 	// Inactive runtimes are loaded with active=false and excluded from
@@ -412,10 +424,17 @@ func buildGatewayRuntimes(gatewayStore *GatewayStore, gatewayState *GatewayState
 	}
 	t0 := time.Now()
 	ch := make(chan buildResult, len(allCfgs))
+	if chainClient == nil {
+		return nil, fmt.Errorf("chain gRPC client is required")
+	}
 	deps := runtimeBuildDeps{
-		chainREST:    gatewayState.Settings.ChainREST,
+		bridge:       bridge.NewGRPCBridge(chainClient),
+		chainClient:  chainClient,
 		defaultModel: gatewayState.Settings.DefaultModel,
 		perf:         perf,
+	}
+	if err := deps.validate(); err != nil {
+		return nil, err
 	}
 	for i, cfg := range allCfgs {
 		go func(idx int, cfg RuntimeConfig) {
