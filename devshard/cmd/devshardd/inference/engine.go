@@ -12,6 +12,7 @@ import (
 	mlnodeclient "common/nodemanager"
 	mlnodegen "common/nodemanager/gen"
 	"devshard"
+	"devshard/observability"
 )
 
 // Engine implements devshard.InferenceEngine for the standalone devshardd binary.
@@ -46,13 +47,15 @@ func (e *Engine) Execute(ctx context.Context, req devshard.ExecuteRequest) (*dev
 }
 
 func (e *Engine) executeMLRequest(ctx context.Context, model string, body []byte) (*http.Response, error) {
-	resp, err := e.doWithLockedNode(ctx, model, func(endpoint string) (*http.Response, error) {
+	resp, err := e.doWithLockedNode(ctx, observability.PathExecute, model, func(endpoint string) (*http.Response, error) {
 		url := endpoint + "/v1/chat/completions"
 		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if reqErr != nil {
-			return nil, reqErr
+			return nil, observability.Classify(observability.ReasonApplicationErr, observability.WhereEngineMLNodeCall, reqErr)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		observability.InjectRequestContext(ctx, httpReq.Header)
+		observability.AttachRequestID(httpReq)
 		return e.httpClient.Do(httpReq)
 	})
 	if err != nil {
@@ -66,6 +69,7 @@ func (e *Engine) executeMLRequest(ctx context.Context, model string, body []byte
 // with a transport-class error on earlier attempts.
 func (e *Engine) doWithLockedNode(
 	ctx context.Context,
+	path observability.Path,
 	model string,
 	fn func(endpoint string) (*http.Response, error),
 ) (*http.Response, error) {
@@ -75,34 +79,52 @@ func (e *Engine) doWithLockedNode(
 	const maxAcquireAttempts = 10
 	var excluded []string
 	var lastErr error
+	lastReason := observability.ReasonAcquireErr
 
 	for attempt := 0; attempt < maxAcquireAttempts; attempt++ {
 		acq, err := e.mlClient.Acquire(ctx, model, excluded)
 		if err != nil {
+			lastReason = observability.ReasonAcquireErr
+			observability.IncMLNodeAttempt(path, lastReason, "")
 			lastErr = fmt.Errorf("acquire: %w", err)
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				lastReason = observability.ReasonTimeout
+				return nil, observability.Classify(lastReason, observability.WhereEngineMLNodeCall, ctx.Err())
 			case <-time.After(2 * time.Second):
 			}
 			continue
 		}
 
+		started := time.Now()
 		resp, httpErr := fn(acq.Endpoint)
 		outcome := mlnodegen.ReleaseOutcome_SUCCESS
 
-		if httpErr != nil {
+		lastReason = observability.ClassifyMLNodeHTTP(resp, httpErr, ctx.Err())
+		observability.IncMLNodeAttempt(path, lastReason, acq.NodeId)
+		observability.ObserveMLNodeCall(path, acq.NodeId, observability.MetricPhaseTotal, started)
+
+		switch lastReason {
+		case observability.ReasonTransportErr, observability.ReasonTimeout:
 			outcome = mlnodegen.ReleaseOutcome_TRANSPORT_ERROR
 			lastErr = httpErr
-		} else if resp.StatusCode >= 500 {
-			resp.Body.Close()
+		case observability.ReasonHTTP5xx:
+			if resp != nil {
+				resp.Body.Close()
+			}
 			outcome = mlnodegen.ReleaseOutcome_TRANSPORT_ERROR
-			lastErr = fmt.Errorf("upstream status %d", resp.StatusCode)
+			if resp != nil {
+				lastErr = fmt.Errorf("upstream status %d", resp.StatusCode)
+			}
 			resp = nil
+		case observability.ReasonHTTP4xx:
+			// 4xx surfaced to caller without rotation.
 		}
 
 		if releaseErr := e.mlClient.Release(ctx, acq.LockId, outcome); releaseErr != nil {
+			observability.IncMLNodeAttempt(path, observability.ReasonReleaseErr, acq.NodeId)
 			if lastErr == nil {
+				lastReason = observability.ReasonReleaseErr
 				lastErr = fmt.Errorf("release: %w", releaseErr)
 			}
 		}
@@ -119,7 +141,10 @@ func (e *Engine) doWithLockedNode(
 	if lastErr == nil {
 		lastErr = errors.New("no attempts made")
 	}
-	return nil, lastErr
+	if lastReason == observability.ReasonOK {
+		lastReason = observability.ReasonTransportErr
+	}
+	return nil, observability.Classify(lastReason, observability.WhereEngineMLNodeCall, lastErr)
 }
 
 var _ devshard.InferenceEngine = (*Engine)(nil)

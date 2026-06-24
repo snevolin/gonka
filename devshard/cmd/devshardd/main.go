@@ -11,6 +11,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"devshard/observability"
 )
 
 // Version is the devshard protocol name (approved_versions.name). Set at build
@@ -41,6 +44,20 @@ func run(parent context.Context, args []string, protocolVersion, binaryVersion s
 	}
 
 	slog.SetDefault(slog.New(newPrefixedTextHandler(cfg.BinaryLogVersion, os.Stderr, slog.LevelInfo)))
+
+	observability.SetRuntime(cfg.BinaryLogVersion, cfg.ProtocolVersion, "standalone")
+	shutdownObs, err := observability.Init(parent, observability.Config{
+		ServiceName:    observability.ServiceName,
+		ServiceVersion: cfg.ProtocolVersion,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = shutdownObs(shutdownCtx)
+	}()
 
 	slog.Info("devshardd starting",
 		"protocol_version", cfg.ProtocolVersion,

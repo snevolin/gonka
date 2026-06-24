@@ -28,6 +28,34 @@ HostManager
 See [Storage mode selection](#storage-mode-selection) and
 [storage-modes-plan.md](./storage-modes-plan.md).
 
+### Payload storage (inference prompt/response bytes)
+
+`common/storage/payloads.Open` selects the payload backend for **devshardd**
+(mirrors `decentralized-api/payloadstorage` on `devshard-0.2.13-v2-r2`):
+
+```
+devshardd buildApp
+  -> payloads.Open({data-dir}/payloads)
+       -> file only          when PGHOST unset and single-instance
+       -> postgres + file    when PGHOST set (hybrid, lazy PG reconnect)
+       -> boot error         when multi-versiond overlap without PGHOST
+```
+
+| Deployment | Payload backend | Session backend (`devshard/storage`) |
+|------------|-----------------|--------------------------------------|
+| Single versiond / local dev | **File** under `{data-dir}/payloads` | SQLite or Postgres |
+| Multi versiond hosts / rolling overlap | **Shared Postgres** (required) | Postgres (required) |
+
+Multi-versiond overlap is detected when:
+
+- `VERSIOND_FORCE` lists **more than one** protocol version (old + new child
+  running concurrently on the same supervisor), or
+- `DEVSHARD_REQUIRE_POSTGRES=1` (testenv `versiond.mode: multi` sets this).
+
+**File fallback is not acceptable** for those modes: two runtimes cannot share
+local files safely during binary swap or HA overlap. Boot fails with
+`payloads.ErrSharedPostgresRequired` if `PGHOST` is unset.
+
 The storage interface lives in `devshard/storage/interface.go`. `CreateSession`
 is the only method that introduces an `EpochID`; all later calls use `escrow_id`
 and route through a local `escrow_id -> epoch_id` index.

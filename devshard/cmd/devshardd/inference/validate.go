@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	commonvalidation "common/validation"
@@ -16,6 +19,7 @@ import (
 
 	devshardpkg "devshard"
 	"devshard/bridge"
+	"devshard/observability"
 )
 
 func signPayloadRequest(
@@ -134,4 +138,23 @@ func fetchPayloadsFromExecutor(
 	}
 
 	return payloadResp.PromptPayload, payloadResp.ResponsePayload, nil
+}
+
+func classifyExecuteValidationErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	var classified *observability.ClassifiedError
+	if errors.As(err, &classified) {
+		return err
+	}
+	msg := err.Error()
+	switch {
+	case errors.Is(err, io.EOF) || strings.Contains(msg, "read"):
+		return observability.Classify(observability.ReasonValidationReadErr, observability.WhereRuntimeValidate, err)
+	case strings.Contains(msg, "unmarshal") || strings.Contains(msg, "parse validation"):
+		return observability.Classify(observability.ReasonValidationParseErr, observability.WhereRuntimeValidate, err)
+	default:
+		return observability.Classify(observability.ReasonValidateErr, observability.WhereRuntimeValidate, err)
+	}
 }

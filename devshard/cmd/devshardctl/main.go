@@ -24,6 +24,7 @@ type adminAPIKeySuffixContextKey struct{}
 
 const (
 	defaultChainRESTURL          = "http://localhost:1317"
+	defaultChainGRPCURL          = "localhost:9090"
 	defaultPublicAPIURL          = "http://localhost:9000"
 	defaultModelName             = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
 	defaultListenPort            = "8080"
@@ -64,6 +65,7 @@ var Version = "dev"
 type cliFlags struct {
 	escrowID    string
 	chainREST   string
+	chainGRPC   string
 	publicAPI   string
 	model       string
 	port        string
@@ -206,7 +208,8 @@ func mustReadEscrowRotationModelsEnv() []EscrowRotationModelSettings {
 func parseCLIFlags() cliFlags {
 	fs := flag.NewFlagSet("devshardctl", flag.ExitOnError)
 	escrowID := fs.String("escrow-id", "", "escrow ID (required, or DEVSHARD_ESCROW_ID env)")
-	chainREST := fs.String("chain-rest", defaultChainRESTURL, "chain REST API URL")
+	chainREST := fs.String("chain-rest", defaultChainRESTURL, "chain REST API URL (tx broadcast)")
+	chainGRPC := fs.String("chain-grpc", defaultChainGRPCURL, "chain gRPC URL (params/epoch queries)")
 	publicAPI := fs.String("public-api", defaultPublicAPIURL, "public API URL used for epoch/PoC phase checks")
 	model := fs.String("model", defaultModelName, "default model name")
 	port := fs.String("port", defaultListenPort, "listen port")
@@ -219,6 +222,7 @@ func parseCLIFlags() cliFlags {
 	return cliFlags{
 		escrowID:    *escrowID,
 		chainREST:   *chainREST,
+		chainGRPC:   *chainGRPC,
 		publicAPI:   *publicAPI,
 		model:       *model,
 		port:        *port,
@@ -331,6 +335,14 @@ func mustBootstrapGatewayState(gatewayStore *GatewayStore, opts bootstrapOptions
 	}
 }
 
+func resolveChainGRPCURL() string {
+	return firstNonEmpty(
+		os.Getenv("DEVSHARD_CHAIN_GRPC"),
+		os.Getenv("NODE_GRPC_URL"),
+		defaultChainGRPCURL,
+	)
+}
+
 func mustBuildGateway(gatewayStore *GatewayStore, gatewayState GatewayState, baseStorageDir string) *Gateway {
 	gatewayState.Settings = gatewayState.Settings.WithTuningDefaults()
 	DefaultRequestMaxTokens = gatewayState.Settings.DefaultRequestMaxTokens
@@ -343,7 +355,11 @@ func mustBuildGateway(gatewayStore *GatewayStore, gatewayState GatewayState, bas
 	}
 	perf := NewPerfTracker(perfStore)
 
-	runtimeParams, runtimeParamsClose := mustInitGatewayRuntimeParams(context.Background(), gatewayState.Settings.ChainREST)
+	runtimeParams, runtimeParamsClose := mustInitGatewayRuntimeParams(
+		context.Background(),
+		gatewayState.Settings.ChainREST,
+		resolveChainGRPCURL(),
+	)
 
 	runtimes, err := buildGatewayRuntimes(gatewayStore, &gatewayState, baseStorageDir, perf)
 	if err != nil {

@@ -3,16 +3,21 @@ package inference
 import (
 	"bytes"
 	"common/chain"
+	"common/completionapi"
 	commonvalidation "common/validation"
 	"context"
 	devshardpkg "devshard"
 	"devshard/bridge"
+	"devshard/logging"
+	"devshard/observability"
 	"devshard/storage"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+
+	"github.com/productscience/inference/x/inference/types"
 )
 
 // leaseOps is satisfied by storage.LeaseStore; extracted as interface for testing.
@@ -64,7 +69,23 @@ func (v *Validator) Validate(ctx context.Context, req devshardpkg.ValidateReques
 		ctx, v.bridge, v.recorder, req, inferenceID, epochID, devshardpkg.VersionedSessionPayloadPath(v.boundVersion, req.EscrowID),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("fetch payloads from executor: %w", err)
+		if errors.Is(err, commonvalidation.ErrPayloadGone) {
+			logging.Info("devshard validation skipped: payload pruned on executor",
+				types.Validation,
+				"inferenceId", inferenceID,
+				"executor", req.ExecutorAddress,
+				"epoch", epochID,
+			)
+			return nil, fmt.Errorf("%w: %v", devshardpkg.ErrValidationSkipped, err)
+		}
+		return nil, observability.Classify(observability.ReasonPayloadFetchErr, observability.WhereRuntimeValidate, fmt.Errorf("fetch payloads from executor: %w", err))
+	}
+
+	if _, err := completionapi.ModifyRequestBodyWithLogprobsMode(promptPayload, int32(req.InferenceID), v.chainParams.LogprobsMode()); err != nil {
+		return nil, observability.Classify(observability.ReasonValidationBuildErr, observability.WhereRuntimeValidate, fmt.Errorf("modify request body for validation: %w", err))
+	}
+	if _, err := commonvalidation.UnmarshalResponsePayload(responsePayload); err != nil {
+		return nil, observability.Classify(observability.ReasonOriginalParseErr, observability.WhereRuntimeValidate, fmt.Errorf("parse original response: %w", err))
 	}
 
 	result, err := commonvalidation.ExecuteValidation(
@@ -79,19 +100,21 @@ func (v *Validator) Validate(ctx context.Context, req devshardpkg.ValidateReques
 		v.chainParams.LogprobsMode(),
 	)
 	if err != nil {
-		return nil, err
+		return nil, classifyExecuteValidationErr(err)
 	}
 	return &devshardpkg.ValidateResult{Valid: result.IsSuccessful()}, nil
 }
 
 func (v *Validator) executeMLRequest(ctx context.Context, model string, body []byte) (*http.Response, error) {
-	resp, err := v.engine.doWithLockedNode(ctx, model, func(endpoint string) (*http.Response, error) {
+	resp, err := v.engine.doWithLockedNode(ctx, observability.PathValidate, model, func(endpoint string) (*http.Response, error) {
 		url := endpoint + "/v1/chat/completions"
 		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 		if reqErr != nil {
-			return nil, reqErr
+			return nil, observability.Classify(observability.ReasonApplicationErr, observability.WhereEngineMLNodeCall, reqErr)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		observability.InjectRequestContext(ctx, httpReq.Header)
+		observability.AttachRequestID(httpReq)
 		return v.engine.httpClient.Do(httpReq)
 	})
 	if err != nil {

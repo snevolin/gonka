@@ -4,7 +4,6 @@ import (
 	"common/utils"
 	"decentralized-api/cosmosclient"
 
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -45,13 +44,6 @@ type BridgeStatusResponse struct {
 	LatestBlockNumber         uint64         `json:"latestBlockNumber"`
 	ReadyToProcess            bool           `json:"readyToProcess"`
 	MinBlocksBeforeProcessing int            `json:"minBlocksBeforeProcessing"`
-}
-
-// BridgeAddressesResponse returns bridge contract addresses for a chain
-type BridgeAddressesResponse struct {
-	ChainName string   `json:"chain_name"`
-	ChainID   string   `json:"chain_id"`
-	Addresses []string `json:"addresses"`
 }
 
 // NewBlockQueue creates a new queue for blocks with receipts
@@ -369,34 +361,4 @@ func (s *Server) getBridgeStatus(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, response)
-}
-
-// getBridgeAddresses returns bridge addresses for a specific chain by name
-func (s *Server) getBridgeAddresses(c echo.Context) error {
-	chainName := c.QueryParam("chain")
-
-	if chainName == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Chain parameter is required (e.g., 'ethereum', 'polygon')")
-	}
-
-	// Use chainName directly as chainId
-	chainId := chainName
-
-	// Get addresses for this chain
-	addresses, err := s.recorder.GetBridgeAddresses(c.Request().Context(), chainId)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to get addresses for chain '%s': %v", chainName, err))
-	}
-
-	// Convert to simple address list for API response
-	var addressList []string
-	for _, item := range addresses {
-		addressList = append(addressList, item.Address)
-	}
-
-	return c.JSON(http.StatusOK, &BridgeAddressesResponse{
-		ChainName: chainName,
-		ChainID:   chainId,
-		Addresses: addressList,
-	})
 }

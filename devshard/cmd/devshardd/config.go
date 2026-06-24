@@ -163,8 +163,12 @@ func validateBinaryLogVersion(envValue, linkBinaryVersion string) (string, error
 // /root/.inference dir.
 func loadNodeConfigFromEnv() ChainNodeConfig {
 	nodeHost := envOr("NODE_HOST", "node")
+	chainRPC := strings.TrimSpace(os.Getenv("NODE_RPC_URL"))
+	if chainRPC == "" {
+		chainRPC = "http://" + nodeHost + ":26657"
+	}
 	return ChainNodeConfig{
-		ChainRpcUrl:         "http://" + nodeHost + ":26657",
+		ChainRpcUrl:         chainRPC,
 		ChainGrpcUrl:        envOr("NODE_GRPC_URL", nodeHost+":9090"),
 		ChainID:             envOr("CHAIN_ID", ""),
 		KeyringBackend:      envOr("KEYRING_BACKEND", "file"),

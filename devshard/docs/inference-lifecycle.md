@@ -138,6 +138,14 @@ authenticity.
 
 Devshard executor payloads (prompt / response bytes) live in
 `common/storage/payloads` inside **devshardd**, keyed by
+`(escrow_id, inference_id, epoch_id)`.
+
+**Single versiond / local dev:** when `PGHOST` is unset, payloads are stored as
+files under `{data-dir}/payloads` (same policy as `decentralized-api/payloadstorage`
+on `devshard-0.2.13-v2-r2`).
+
+**Multi versiond / rolling overlap:** shared Postgres is required; see
+`devshard/docs/storage-design.md` (payload storage section).
 `(escrow_id, inference_id, epoch_id)`. There is **no** per-inference
 delete when an inference is sealed. Payloads are reclaimed only when
 devshardd drops an entire epoch partition on a new block:

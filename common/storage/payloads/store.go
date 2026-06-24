@@ -1,20 +1,18 @@
 package payloads
 
 import (
-	"common/logging"
 	"context"
 	"errors"
 	"fmt"
 	"sync"
+
+	"common/logging"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/productscience/inference/x/inference/types"
 )
-
-// ErrNotFound is returned when a requested payload does not exist.
-var ErrNotFound = errors.New("payloads: not found")
 
 const schema = `
 CREATE TABLE IF NOT EXISTS payload_storage (
@@ -27,13 +25,16 @@ CREATE TABLE IF NOT EXISTS payload_storage (
 ) PARTITION BY RANGE (epoch_id);
 `
 
-// Store holds a shared connection pool for the payload_storage table.
+// Store is the Postgres-backed payload storage.
 type Store struct {
 	pool        *pgxpool.Pool
 	knownEpochs sync.Map
 }
 
-// New creates a Store and ensures the payload_storage table exists.
+type postgresStorage = Store
+
+// New creates a Postgres Store and ensures the payload_storage table exists.
+// Prefer Open for devshardd startup; New is used by tests and direct pool wiring.
 func New(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	if _, err := pool.Exec(ctx, schema); err != nil {
 		return nil, fmt.Errorf("payloads: ensure schema: %w", err)
@@ -41,9 +42,30 @@ func New(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	return &Store{pool: pool}, nil
 }
 
-// ensurePartition creates the epoch partition if it does not already exist.
-// Note: concurrent writes to the same epoch may race on the CREATE TABLE — this is
-// acceptable since IF NOT EXISTS makes it idempotent and any error is retried by the caller.
+func newPostgresStorage(ctx context.Context) (*postgresStorage, error) {
+	pool, err := pgxpool.New(ctx, "")
+	if err != nil {
+		return nil, fmt.Errorf("connect to postgres: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+	store, err := New(ctx, pool)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	logging.Info("PostgreSQL payload storage initialized", types.PayloadStorage)
+	return store, nil
+}
+
+func (s *Store) Close() {
+	if s.pool != nil {
+		s.pool.Close()
+	}
+}
+
 func (s *Store) ensurePartition(ctx context.Context, epochId uint64) error {
 	if _, ok := s.knownEpochs.Load(epochId); ok {
 		return nil
@@ -69,8 +91,6 @@ func (s *Store) ensurePartition(ctx context.Context, epochId uint64) error {
 	return nil
 }
 
-// Store persists the prompt and response payloads for an inference.
-// The table is partitioned by epoch_id; partitions are created lazily on first write.
 func (s *Store) Store(ctx context.Context, escrowId string, inferenceId, epochId uint64, prompt, response []byte) error {
 	if err := s.ensurePartition(ctx, epochId); err != nil {
 		return err
@@ -87,7 +107,6 @@ func (s *Store) Store(ctx context.Context, escrowId string, inferenceId, epochId
 	return nil
 }
 
-// Retrieve fetches the stored prompt and response for an inference.
 func (s *Store) Retrieve(ctx context.Context, escrowId string, inferenceId, epochId uint64) (prompt, response []byte, err error) {
 	err = s.pool.QueryRow(ctx,
 		`SELECT prompt_payload, response_payload
@@ -104,7 +123,6 @@ func (s *Store) Retrieve(ctx context.Context, escrowId string, inferenceId, epoc
 	return prompt, response, nil
 }
 
-// DropEpoch drops the partition for exactly one epoch. Idempotent.
 func (s *Store) DropEpoch(ctx context.Context, epochId uint64) error {
 	partition := pgx.Identifier{fmt.Sprintf("payload_storage_epoch_%d", epochId)}.Sanitize()
 	if _, err := s.pool.Exec(ctx, "DROP TABLE IF EXISTS "+partition); err != nil {
@@ -114,3 +132,5 @@ func (s *Store) DropEpoch(ctx context.Context, epochId uint64) error {
 	logging.Info("Dropped epoch partition", types.PayloadStorage, "epochId", epochId)
 	return nil
 }
+
+var _ Storage = (*Store)(nil)

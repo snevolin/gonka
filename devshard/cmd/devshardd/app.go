@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
 	"common/chain"
 	mlnodeclient "common/nodemanager"
+	commrc "common/runtimeconfig"
 	"common/storage/payloads"
 	devshardpkg "devshard"
 	"devshard/cmd/devshardd/events"
@@ -22,9 +24,6 @@ import (
 	"devshard/signing"
 	devshardstorage "devshard/storage"
 
-	inferencetypes "github.com/productscience/inference/x/inference/types"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 )
 
@@ -90,16 +89,12 @@ func buildApp(ctx context.Context, cfg runtimeConfig) (_ *devshardApp, err error
 	}
 	closers.Add(func() { mlClient.Close() })
 
-	pool, err := pgxpool.New(ctx, "")
-	if err != nil {
-		return nil, fmt.Errorf("pgxpool: %w", err)
-	}
-	closers.Add(pool.Close)
-
-	payloadStore, err := payloads.New(ctx, pool)
+	payloadDir := filepath.Join(cfg.DataDir, "payloads")
+	payloadStore, payloadClose, err := payloads.Open(ctx, payloads.OpenConfig{Dir: payloadDir})
 	if err != nil {
 		return nil, fmt.Errorf("payload store: %w", err)
 	}
+	closers.Add(payloadClose)
 
 	manager, err := buildHostManager(ctx, cfg, chainRuntime, mlClient, payloadStore, &closers)
 	if err != nil {
@@ -180,13 +175,13 @@ func buildHostManager(
 	cfg runtimeConfig,
 	chainRuntime *chainRuntime,
 	mlClient *mlnodeclient.Client,
-	payloadStore *payloads.Store,
+	payloadStore payloads.Storage,
 	closers *closeStack,
 ) (*session.HostManager, error) {
 	availabilityTracker := devshardpkg.NewAvailabilityTracker(true, 0, 0)
-	seedAvailabilityFromChain(ctx, chainRuntime.identity, availabilityTracker)
+	seedAvailabilityFromChain(ctx, chainRuntime.client, availabilityTracker)
 
-	paramsSetup, err := newParamsProvider(ctx, chainRuntime.identity, mlClient, availabilityTracker, slog.Default())
+	paramsSetup, err := newParamsProvider(ctx, chainRuntime.client, mlClient, availabilityTracker, slog.Default())
 	if err != nil {
 		return nil, fmt.Errorf("runtime params provider: %w", err)
 	}
@@ -277,26 +272,20 @@ func buildHostManager(
 
 const availabilitySeedTimeout = 3 * time.Second
 
-func seedAvailabilityFromChain(ctx context.Context, qcp runtimeparams.QueryClientProvider, tracker *devshardpkg.AvailabilityTracker) {
-	if qcp == nil || tracker == nil {
+func seedAvailabilityFromChain(ctx context.Context, chainClient *chain.Client, tracker *devshardpkg.AvailabilityTracker) {
+	if chainClient == nil || tracker == nil {
 		return
 	}
 	seedCtx, cancel := context.WithTimeout(ctx, availabilitySeedTimeout)
 	defer cancel()
 
-	qc := qcp.NewInferenceQueryClient()
-	resp, err := qc.Params(seedCtx, &inferencetypes.QueryParamsRequest{})
+	snap, err := commrc.NewChainFetcher(chainClient).FetchSnapshot(seedCtx)
 	if err != nil {
 		slog.Warn("availability seed: chain Params query failed; keeping optimistic seed", "err", err)
 		return
 	}
-	if resp.Params.DevshardEscrowParams == nil {
-		slog.Warn("availability seed: chain returned no DevshardEscrowParams; keeping optimistic seed")
-		return
-	}
-	enabled := resp.Params.DevshardEscrowParams.DevshardRequestsEnabled
-	tracker.Record(enabled, time.Now().Unix(), 0)
-	slog.Info("availability seed: applied from chain", "devshard_requests_enabled", enabled)
+	tracker.Record(snap.DevshardRequestsEnabled, time.Now().Unix(), 0)
+	slog.Info("availability seed: applied from chain", "devshard_requests_enabled", snap.DevshardRequestsEnabled)
 }
 
 func logCleanupError(msg string, err error) {

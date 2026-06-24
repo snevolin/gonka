@@ -1,13 +1,37 @@
-.PHONY: build test tidy generate generate-api check-gen
+.PHONY: all build-docker release build test tidy generate generate-api check-gen validate
+
+include ../scripts/blst-portable.mk
 
 VERSION ?= $(shell git describe --always)
 BLST_PORTABLE ?= 0
+SET_LATEST ?= 0
 
 BUILD_FLAGS := -ldflags "-X main.version=$(VERSION)"
 
 ifeq ($(BLST_PORTABLE),1)
 export CGO_CFLAGS := $(CGO_CFLAGS) -D__BLST_PORTABLE__
 endif
+
+define DOCKER_BUILD
+	@echo "--> building edge-api docker image"
+	@echo "    	platform: $(PLATFORM)"
+	@DOCKER_BUILDKIT=1 docker build \
+		--platform $(PLATFORM) \
+		-f edge-api/Dockerfile \
+		. \
+		-t $(DOCKER_TAG)
+endef
+
+all: build-docker
+
+build-docker:
+	$(eval PLATFORM=$(DOCKER_PLATFORM))
+	$(eval DOCKER_TAG=ghcr.io/product-science/edge-api:$(VERSION))
+	$(DOCKER_BUILD)
+	@if [ "$(SET_LATEST)" = "1" ]; then \
+		echo "Setting latest tag..."; \
+		docker tag $(DOCKER_TAG) ghcr.io/product-science/edge-api:latest edge-api:latest; \
+	fi
 
 generate: generate-api
 
@@ -22,6 +46,9 @@ build:
 
 test:
 	go test ./... -count=1
+
+validate:
+	@bash ../scripts/validate-edge-api.sh
 
 tidy:
 	go mod tidy

@@ -9,6 +9,7 @@ import (
 
 	"common/completionapi"
 	devshardpkg "devshard"
+	"devshard/observability"
 )
 
 type mlRequestExecutor func(ctx context.Context, model string, body []byte) (*http.Response, error)
@@ -33,7 +34,7 @@ func executeInference(
 
 	modified, err := completionapi.ModifyRequestBodyWithLogprobsMode(req.Prompt, seed, chainParams.LogprobsMode())
 	if err != nil {
-		return nil, fmt.Errorf("modify request body: %w", err)
+		return nil, observability.Classify(observability.ReasonModifyRequestErr, observability.WhereRuntimeExecute, fmt.Errorf("modify request body: %w", err))
 	}
 
 	resp, err := execute(ctx, req.Model, modified.NewBody)
@@ -44,12 +45,14 @@ func executeInference(
 
 	processed, err := processExecutionHTTPResponse(req, resp, inferenceID)
 	if err != nil {
-		return nil, err
+		return nil, observability.Classify(observability.ReasonProcessResponseErr, observability.WhereRuntimeExecute, err)
 	}
+	observability.ObserveTokens(observability.PathExecute, "", observability.TokenKindPrompt, processed.inputTokens)
+	observability.ObserveTokens(observability.PathExecute, "", observability.TokenKindCompletion, processed.outputTokens)
 
 	promptPayload, err := devshardpkg.CanonicalizeJSON(req.Prompt)
 	if err != nil {
-		return nil, fmt.Errorf("canonicalize prompt: %w", err)
+		return nil, observability.Classify(observability.ReasonCanonicalizePromptErr, observability.WhereRuntimeExecute, fmt.Errorf("canonicalize prompt: %w", err))
 	}
 
 	if err := store.Store(
@@ -60,7 +63,7 @@ func executeInference(
 		promptPayload,
 		processed.responseBody,
 	); err != nil {
-		return nil, fmt.Errorf("store payloads: %w", err)
+		return nil, observability.Classify(observability.ReasonPayloadStoreErr, observability.WhereRuntimeExecute, fmt.Errorf("store payloads: %w", err))
 	}
 
 	return &devshardpkg.ExecuteResult{

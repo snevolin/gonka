@@ -19,10 +19,10 @@ import (
 
 // Postgres implements Storage on top of PostgreSQL declarative partitioning.
 //
-// Three parent tables -- devshard_sessions, devshard_diffs, devshard_signatures
-// -- each PARTITION BY RANGE (epoch_id). One partition per epoch is created
-// lazily on first write. PruneEpoch is a single DROP TABLE per parent, so it is
-// O(1) and never touches other epochs' pages.
+// Nine parent tables (sessions, diffs, signatures, snapshots, sealed inferences,
+// validation obs tables, validation leases) use PARTITION BY RANGE (epoch_id).
+// One child partition per epoch is created lazily on first write. PruneEpoch is
+// a DROP TABLE per child partition, so it is O(1) and never touches other epochs.
 //
 // Layout mirrors the per-epoch SQLite backend so that callers behave identically
 // against both. A small unpartitioned escrowID -> epochID index enforces the
@@ -62,6 +62,20 @@ const (
 	pgValidationLeasesParent       = "devshard_validation_leases"
 	pgSessionIndex                 = "devshard_session_index"
 )
+
+// postgresPartitionedParents lists every PARTITION BY RANGE (epoch_id) parent
+// table; ensurePartition creates one child partition per epoch for each.
+var postgresPartitionedParents = []string{
+	pgSessionsParent,
+	pgDiffsParent,
+	pgSignaturesParent,
+	pgSnapshotsParent,
+	pgInferencesParent,
+	pgValidationObsParent,
+	pgInferenceValidationObsParent,
+	pgSealedValidationObsParent,
+	pgValidationLeasesParent,
+}
 
 func pgSessionsPartition(epochID uint64) string {
 	return fmt.Sprintf("%s_epoch_%d", pgSessionsParent, epochID)

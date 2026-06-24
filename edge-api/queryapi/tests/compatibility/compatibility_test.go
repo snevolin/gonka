@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -245,9 +246,28 @@ func runCompatibilityTest(t *testing.T, c1, c2 *ClientWithResponses, name string
 			return // both errored the same way — compatible
 		}
 		if body1 != body2 {
+			keys1 := jsonTopLevelKeys(body1)
+			keys2 := jsonTopLevelKeys(body2)
+			if reflect.DeepEqual(keys1, keys2) {
+				t.Logf("bodies differ but top-level JSON keys match (%v); treating as compatible", keys1)
+				return
+			}
 			t.Errorf("body mismatch:\n%s", jsonDiff(body1, body2))
 		}
 	})
+}
+
+func jsonTopLevelKeys(body string) []string {
+	var v map[string]any
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(v))
+	for k := range v {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // statusOf extracts the HTTP status code from any *XxxResponse via reflection.

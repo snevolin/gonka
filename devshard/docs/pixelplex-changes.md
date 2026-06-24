@@ -17,11 +17,11 @@ devshardd).
 |-------|--------|
 | 0 — Scaffold `edge-api/` | **Done** |
 | 1 — Move `common/queryapi` | **Done** |
-| 2 — Handler fixes (dapi compatibility) | Pending |
-| 3 — Deploy & proxy routing | Pending |
-| 4 — Validation | Pending |
-| 5 — Remove Tier A from dapi | Pending |
-| 6 — Docs & merge-plan | Pending |
+| 2 — Handler fixes (dapi compatibility) | **Done** |
+| 3 — Deploy & proxy routing | **Done** |
+| 4 — Validation | **Done** |
+| 5 — Remove Tier A from dapi | **Done** |
+| 6 — Docs & merge-plan | **Done** |
 
 ---
 
@@ -200,45 +200,119 @@ cd common && go test ./observability/... ./chain/... -count=1
 
 ---
 
-## Phase 3 — Deploy & proxy routing
+## Completed: Phase 3 — Deploy & proxy routing
+
+**Status:** **Done**
 
 ### 3.1 Runtime placement
 
-Run **edge-api** as a sidecar or sibling container next to dapi on each node (same as
-`api` service in `local-test-net`).
-
-Suggested env:
+`edge-api` runs as a sibling container next to dapi (`api` / `chain-node` gRPC at `:9090`).
 
 | Variable | Purpose |
 |----------|---------|
-| `EDGE_API_PORT` | Listen port inside container (e.g. `18080`) |
-| `CHAIN_GRPC_URL` | Chain gRPC (e.g. `chain-node:9090`) |
+| `EDGE_API_PORT` | Listen port inside container (default `18080`) |
+| `CHAIN_GRPC_URL` | Chain gRPC (e.g. `genesis-node:9090` or `node:9090`) |
+| `EDGE_API_SERVICE_NAME` | Proxy upstream hostname (`edge-api` or `edge-api-router`) |
+| `EDGE_API_ROUTE_PATHS` | Optional override of the 22 Tier A paths (defaults in `proxy/entrypoint.sh`) |
 
 ### 3.2 `local-test-net/`
 
-1. Add `edge-api` service to `docker-compose-base.yml` (or overlay).
-2. Build context: `./edge-api`, depends on `chain-node`.
-3. Patch **proxy** nginx template / `entrypoint.sh`:
-   - Route the **22 Tier A paths** to `edge-api` upstream.
-   - Route remaining `/v1/` to `api` (dapi).
-   - Keep `/devshard/` → versiond unchanged.
-4. **Do not** add `PUBLIC_DEVSHARD_ROUTE_PATHS` → devshardd.
+| File | Purpose |
+|------|---------|
+| `docker-compose-base.yml` | Single `edge-api` + proxy `EDGE_API_SERVICE_NAME=edge-api` |
+| `docker-compose.edge-api.yml` | Adds `edge-api-2`, `edge-api-3`, `edge-api-router` (round-robin) |
+| `docker-compose.edge-api-router-proxy.yml` | Genesis overlay: `EDGE_API_SERVICE_NAME=edge-api-router` |
+
+Proxy (`proxy/entrypoint.sh`):
+
+- **22 Tier A paths** → `edge_api_backend` (edge-api or edge-api-router).
+- Remaining `/v1/` → dapi (`api`).
+- `/v1/devshard/*` → rewrite to `/devshard/v1/*` → versiond (legacy clients).
+- `/devshard/` → versiond (unchanged).
+- **No** `PUBLIC_DEVSHARD_ROUTE_PATHS` → devshardd.
 
 ### 3.3 `deploy/join/`
 
-Mirror local-test-net: edge-api service + proxy env for upstream name (e.g.
-`EDGE_API_SERVICE_NAME=edge-api`).
+| File | Purpose |
+|------|---------|
+| `docker-compose.yml` | Single `edge-api` + proxy env (`EDGE_API_SERVICE_NAME`, `EDGE_API_PORT`) |
+| `docker-compose.edge-api-multi.yml` | Optional: `edge-api2`, `edge-api3`, `edge-api-router`; proxy → router |
 
-### 3.4 `devshardd`
+### 3.4 `edge-api-router/`
 
-Confirm `devshard/cmd/devshardd/server.go` serves only:
+Nginx round-robin across `EDGE_API_HOSTS` (mirrors `versiond-router/` pattern; no sticky hash).
 
-- `GET /healthz`
-- `/sessions/:id/*` (devshard session routes)
+### 3.5 `devshardd`
+
+`devshard/cmd/devshardd/server.go` serves only `GET /healthz` and `/sessions/:id/*` (Phase 1).
+
+### 3.6 Build targets
+
+Root `make build-docker` builds `edge-api` and `edge-api-router` images.
 
 ---
 
-## Phase 4 — Validation (before dapi removal)
+## Phase 3 (reference) — Deploy & proxy routing
+
+## Completed: Phase 4 — Validation (before dapi removal)
+
+**Status:** **Done**
+
+### 4.1 Contract tests (dapi JSON shape)
+
+| Test | Path |
+|------|------|
+| Top-level JSON keys vs dapi contract | `edge-api/queryapi/tests/dapi_contract_test.go` |
+| OpenAPI ↔ proxy ↔ canonical 22-route list | `edge-api/queryapi/tests/routes_contract_test.go` |
+| Epoch participants golden keys + `proof_ops` | `edge-api/queryapi/tests/epoch_participants_golden_test.go` |
+| Live two-server diff (optional) | `edge-api/queryapi/tests/compatibility/` (`-tags compat`, `-endpoint1` / `-endpoint2`) |
+
+Compatibility harness: when full JSON bodies differ only in dynamic values (block height, timestamps), **top-level keys** must still match.
+
+### 4.2 Proof path
+
+| Test | Purpose |
+|------|---------|
+| `TestEpochParticipantsProofBundleAcceptedByVerifyProof` | `GET /v1/epochs/{epoch}/participants` returns `proof_ops`; `POST /v1/verify-proof` parses the bundle and attempts verification |
+| `TestVerifyProofRejectsMalformedBundle` | Malformed verify-proof body returns 400 |
+
+### 4.3 Proxy / compose render
+
+`scripts/validate-edge-api.sh` runs:
+
+- `go test ./edge-api/queryapi/...`
+- `docker compose config` for local-test-net (base, multi edge-api + router) and deploy/join (+ multi overlay)
+
+### 4.4 Smoke (optional, live stack)
+
+Set `PROXY_URL` when running the validation script:
+
+```bash
+PROXY_URL=http://localhost bash scripts/validate-edge-api.sh
+```
+
+Checks `/v1/status`, `/v1/models`, `/v1/epochs/latest/participants` via proxy; confirms `/v1/chat/completions` still reaches dapi.
+
+Live dapi vs edge-api diff:
+
+```bash
+EDGE_API_URL=http://localhost:18080 DAPI_URL=http://localhost:9000 \
+  bash scripts/validate-edge-api.sh
+```
+
+### 4.5 CI
+
+`.github/workflows/verify.yml` — job `build-and-test-edge-api` runs unit tests + validation script (compose render).
+
+**Validated:**
+
+```bash
+make -C edge-api validate
+```
+
+---
+
+## Phase 4 (reference) — Validation (before dapi removal)
 
 1. **Contract tests:** port `edge-api/queryapi/tests/` + compatibility client; add dapi vs
    edge-api JSON diff tests for the 22 routes (Testermint or Go integration).
@@ -252,6 +326,8 @@ Confirm `devshard/cmd/devshardd/server.go` serves only:
 ---
 
 ## Phase 5 — Remove Tier A from `decentralized-api` (final)
+
+**Status:** **Done**
 
 **Only after Phase 4 passes in CI and staging.**
 
@@ -300,7 +376,21 @@ cd decentralized-api && go build ./... && go test ./internal/server/public/...
 
 ---
 
-## Phase 6 — Docs & merge-plan updates
+## Completed: Phase 6 — Docs & merge-plan updates
+
+**Status:** **Done**
+
+1. **[merge-plan.md](./merge-plan.md)** updated:
+   - [Runtime topology](./merge-plan.md#runtime-topology-edge-api-versiond-and-devshardd) — proxy split, instance counts, answers on multi devshard / multi edge-api.
+   - Phase C proxy: Tier A → **edge-api** (`EDGE_API_ROUTE_PATHS`); not `PUBLIC_DEVSHARD_ROUTE_PATHS` → devshardd.
+   - `edge-api/` and `edge-api-router/` added to scope summary and root checklist.
+   - `common/queryapi` marked relocated to `edge-api/queryapi/`.
+2. **`local-test-net/README.md`** — edge-api and versiond overlay sections added.
+3. **`proxy/README.md`** — already documents edge-api vs dapi routing (Phase 3).
+
+---
+
+## Phase 6 (reference) — Docs & merge-plan updates
 
 1. Update [merge-plan.md](./merge-plan.md):
    - Phase C proxy: Tier A → **edge-api**, not devshardd / `PUBLIC_DEVSHARD_ROUTE_PATHS`.
@@ -316,10 +406,10 @@ cd decentralized-api && go build ./... && go test ./internal/server/public/...
 Phase 0  Scaffold edge-api/ (module, main, healthz)                    [Done]
 Phase 1  git mv common/queryapi → edge-api/queryapi; fix imports     [Done]
 Phase 2  Handler + OpenAPI fixes (models shape, pricing types, participants, transport OTel) [Done]
-Phase 3  Docker + proxy routing to edge-api; strip queryapi from devshardd
-Phase 4  Tests + staging validation
-Phase 5  Remove 22 routes + dead handlers from decentralized-api
-Phase 6  Docs
+Phase 3  Docker + proxy routing to edge-api; strip queryapi from devshardd [Done]
+Phase 4  Tests + staging validation [Done]
+Phase 5  Remove 22 routes + dead handlers from decentralized-api              [Done]
+Phase 6  Docs & merge-plan updates                                        [Done]
 ```
 
 ---

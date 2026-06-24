@@ -18,6 +18,7 @@ import (
 // Defined here so dependents (e.g. edge-api/queryapi, devshard/bridge) can reference it without
 // importing the full generated proto package.
 type InferenceClient interface {
+	Params(context.Context, *inferencetypes.QueryParamsRequest, ...grpc.CallOption) (*inferencetypes.QueryParamsResponse, error)
 	EpochInfo(context.Context, *inferencetypes.QueryEpochInfoRequest, ...grpc.CallOption) (*inferencetypes.QueryEpochInfoResponse, error)
 	GetCurrentEpoch(ctx context.Context, in *inferencetypes.QueryGetCurrentEpochRequest, opts ...grpc.CallOption) (*inferencetypes.QueryGetCurrentEpochResponse, error)
 	ParticipantsWithBalances(context.Context, *inferencetypes.QueryParticipantsWithBalancesRequest, ...grpc.CallOption) (*inferencetypes.QueryParticipantsWithBalancesResponse, error)

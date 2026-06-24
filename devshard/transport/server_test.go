@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"devshard"
 	"devshard/host"
 	"devshard/internal/testutil"
 	"devshard/signing"
@@ -34,18 +35,21 @@ type serverTestEnv struct {
 	config     types.SessionConfig
 }
 
-// registerServer wires srv's handlers onto g exactly as the old Server.Register
-// method did. Kept in tests; production wiring uses server/routes.go RegisterLazySessionRoutes.
+// registerServer wires srv's handlers onto g using the same auth + rate-limit
+// chain as server/routes.go withSessionAuth. Kept in tests; production wiring
+// uses RegisterLazySessionRoutes.
 func registerServer(g *echo.Group, srv *Server) {
-	g.Use(srv.AuthMiddleware)
-	if srv.rateLimit != nil {
-		g.Use(rateLimitMiddleware(srv.rateLimit, true))
+	withAuth := func(recordChatTerminal bool, handler echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			wrapped := srv.RateLimitMiddleware(recordChatTerminal)(handler)
+			return srv.AuthMiddleware(wrapped)(c)
+		}
 	}
-	g.POST("/sessions/:id/chat/completions", srv.HandleInference)
-	g.POST("/sessions/:id/verify-timeout", srv.HandleVerifyTimeout)
-	g.POST("/sessions/:id/challenge-receipt", srv.HandleChallengeReceipt)
-	g.POST("/sessions/:id/gossip/nonce", srv.HandleGossipNonce)
-	g.POST("/sessions/:id/gossip/txs", srv.HandleGossipTxs)
+	g.POST("/sessions/:id/chat/completions", withAuth(true, srv.HandleInference))
+	g.POST("/sessions/:id/verify-timeout", withAuth(false, srv.HandleVerifyTimeout))
+	g.POST("/sessions/:id/challenge-receipt", withAuth(false, srv.HandleChallengeReceipt))
+	g.POST("/sessions/:id/gossip/nonce", withAuth(false, srv.HandleGossipNonce))
+	g.POST("/sessions/:id/gossip/txs", withAuth(false, srv.HandleGossipTxs))
 	g.GET("/sessions/:id/diffs", srv.HandleGetDiffs)
 	g.GET("/sessions/:id/mempool", srv.HandleGetMempool)
 	g.GET("/sessions/:id/signatures", srv.HandleGetSignatures)
@@ -472,6 +476,56 @@ func TestServer_VerifyTimeout_GroupMemberRejected(t *testing.T) {
 	body := []byte(`{}`)
 	rec := env.doPostAs(t, "/devshard/v2/sessions/escrow-1/verify-timeout", body, env.hostSigner)
 	require.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestServer_VerifyTimeout_RequestsDisabled(t *testing.T) {
+	hostSigner := testutil.MustGenerateKey(t)
+	userSigner := testutil.MustGenerateKey(t)
+	group := testutil.MakeGroup([]*signing.Secp256k1Signer{hostSigner})
+	config := testutil.DefaultConfig(1)
+	verifier := signing.NewSecp256k1Verifier()
+
+	sm, err := state.NewStateMachine("escrow-1", config, group, 100000, userSigner.Address(), verifier, testutil.MustMemoryStore(t, "escrow-1", userSigner.Address(), config, group, 100000))
+	require.NoError(t, err)
+	engine := stub.NewInferenceEngine()
+	store := storage.NewMemory()
+	require.NoError(t, store.CreateSession(storage.CreateSessionParams{
+		EscrowID:       "escrow-1",
+		Version:        testutil.RuntimeTestVersion,
+		Config:         config,
+		Group:          group,
+		InitialBalance: 100000,
+	}))
+
+	tracker := devshard.NewAvailabilityTracker(false, 100, 7)
+	h, err := host.NewHost(sm, hostSigner, engine, "escrow-1", group, nil,
+		host.WithGrace(100),
+		host.WithStorage(store),
+		host.WithAvailabilityProvider(tracker),
+	)
+	require.NoError(t, err)
+
+	srv, err := NewServer(h, store, verifier, userSigner.Address())
+	require.NoError(t, err)
+
+	e := echo.New()
+	g := e.Group("/devshard/v2")
+	registerServer(g, srv)
+
+	body := []byte(`{}`)
+	ts := time.Now().Unix()
+	sig, err := SignRequest(userSigner, "escrow-1", body, ts)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/devshard/v2/sessions/escrow-1/verify-timeout", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(HeaderSignature, hex.EncodeToString(sig))
+	req.Header.Set(HeaderTimestamp, fmt.Sprintf("%d", ts))
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Equal(t, DevshardErrorRequestsDisabled, rec.Header().Get(HeaderDevshardError))
 }
 
 func TestServer_ChallengeReceipt_GroupMemberAllowed(t *testing.T) {

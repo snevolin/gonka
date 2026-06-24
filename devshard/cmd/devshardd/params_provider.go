@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	mlnodeclient "common/nodemanager"
+	"common/chain"
 	devshardpkg "devshard"
 	"devshard/runtimeparams"
 	devshardstorage "devshard/storage"
@@ -23,7 +24,7 @@ type paramsProviderResult struct {
 
 func newParamsProvider(
 	ctx context.Context,
-	recorder runtimeparams.QueryClientProvider,
+	chainClient *chain.Client,
 	mlClient *mlnodeclient.Client,
 	availability *devshardpkg.AvailabilityTracker,
 	logger *slog.Logger,
@@ -31,12 +32,12 @@ func newParamsProvider(
 	if mlClient == nil {
 		return nil, fmt.Errorf("runtime params provider: NodeManager client is required")
 	}
-	if recorder == nil {
-		return nil, fmt.Errorf("runtime params provider: query client provider is required")
+	if chainClient == nil {
+		return nil, fmt.Errorf("runtime params provider: chain client is required")
 	}
 
 	managed, err := runtimeparams.NewManaged(ctx, runtimeparams.SetupConfig{
-		Chain:        runtimeparams.NewGRPCChainFetcher(recorder),
+		Chain:        runtimeparams.NewGRPCChainFetcher(chainClient),
 		GRPCClient:   mlClient.NodeManagerClient(),
 		Availability: availability,
 		Logger:       logger,

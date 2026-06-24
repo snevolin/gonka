@@ -5,6 +5,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+
+	"devshard/observability"
 )
 
 // buildServer creates the Echo instance for devshardd session traffic only.
@@ -15,6 +17,8 @@ func buildServer() *echo.Echo {
 	e.HidePort = true
 	e.Use(middleware.Recover())
 
+	observability.RegisterRuntimeCollectors()
+	e.GET("/metrics", echo.WrapHandler(observability.MetricsHandler()))
 	e.GET("/healthz", func(c echo.Context) error { return c.String(http.StatusOK, "ok") })
 
 	return e

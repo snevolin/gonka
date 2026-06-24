@@ -146,6 +146,11 @@ generate:
 	@echo "--> running go generate"
 	@go generate ./...
 
+.PHONY: ci-testenv-nodemanager
+ci-testenv-nodemanager:
+	@echo "--> nodemanager + runtimeconfig delegation tests"
+	@go test ./nodemanager/... -count=1
+
 test:
 	@echo "--> running tests"
 	@go test ./... -timeout 120s

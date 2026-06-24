@@ -1,5 +1,35 @@
 # syntax=docker/dockerfile:1.4
 
+FROM golang:1.25.9-alpine3.23 AS devshardctl-builder
+
+ARG DEVSHARD_VERSION=dev
+
+RUN apk add --no-cache git
+
+COPY inference-chain/ /app/inference-chain
+COPY common/ /app/common
+
+WORKDIR /app/devshard
+COPY devshard/go.mod devshard/go.sum ./
+
+RUN --mount=type=cache,id=devshard-go-build,target=/root/.cache/go-build \
+    --mount=type=cache,id=devshard-go-mod,target=/go/pkg/mod \
+    go mod download
+
+COPY devshard/. .
+
+# devshardctl: pure Go, no CGO needed
+RUN --mount=type=cache,id=devshard-go-build,target=/root/.cache/go-build \
+    --mount=type=cache,id=devshard-go-mod,target=/go/pkg/mod \
+    CGO_ENABLED=0 go build \
+    -ldflags "-X main.Version=${DEVSHARD_VERSION} -X devshard/types.buildStateRootProtocolVersion=${DEVSHARD_VERSION}" \
+    -o /devshardctl ./cmd/devshardctl
+
+# Testenv / gateway-only image (no CGO devshardd build).
+FROM alpine:3.23 AS devshardctl-runtime
+RUN apk add --no-cache ca-certificates wget
+COPY --from=devshardctl-builder /devshardctl /usr/local/bin/devshardctl
+
 FROM golang:1.25.9-alpine3.23 AS builder
 
 ARG GOOS
