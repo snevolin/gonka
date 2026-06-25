@@ -80,7 +80,6 @@ func TestCaptureEmptyStreamAttemptRequestWritesSeparateFileWithAttempts(t *testi
 			hostID:                           "host-empty",
 			escrowID:                         "escrow-7",
 			nonce:                            11,
-			receiptTime:                      time.Now(),
 			resp:                             &host.HostResponse{ConfirmedAt: 123, Receipt: []byte("receipt"), StreamBytesRead: 14},
 			err:                              errEmptyStream,
 			emptyResponseBodySample:          "data: [DONE]\n\n",
@@ -95,6 +94,7 @@ func TestCaptureEmptyStreamAttemptRequestWritesSeparateFileWithAttempts(t *testi
 			err:      nil,
 		},
 	}
+	attempts[0].setReceiptAt(time.Now())
 	attempts[0].outputBytes.Store(14)
 	attempts[1].outputChunks.Store(1)
 	attempts[1].contentChunks.Store(1)

@@ -80,10 +80,13 @@ dapi so it can be made highly available.
 
 Two pillars:
 
-- **A. edge-api becomes the highly-available chain access + event hub.** All
-  other services read chain state and receive chain events from edge-api instead
-  of subscribing to the chain themselves. Redis backs edge-api's shared state and
-  leader election.
+- **A. edge-api becomes the highly-available chain access + event hub.** A
+  **separate** edge-api tier gathers block events from the chain, **publishes**
+  them to NATS (and other subscribers), and **caches** chain queries so node
+  services do not each open their own gRPC/RPC subscriptions. The same surface
+  can later be reused by **dashboards and monitoring** (read APIs + event stream)
+  without coupling observability to dapi or devshardd. Redis backs edge-api's
+  shared state and leader election.
 - **B. dapi is decomposed into independently-scalable services** around a
   **standalone HA NATS** queue, a **stateless signer service**, **Postgres** as
   the only stateful backend, and stateless REST/echo workers.
@@ -91,6 +94,23 @@ Two pillars:
 ---
 
 ## 3. Pillar A — edge-api as the HA event hub & chain cache
+
+### Purpose of a separate edge-api
+
+**edge-api** is split out as its own service so the node has one **chain-facing
+tier** with two jobs:
+
+1. **Block events** — subscribe to the inference-chain once (CometBFT
+   `NewBlock` + per-tx events), normalize them, and **transmit** the stream to
+   **NATS** and other subscribers (dapi node-manager, devshardd, PoC workers).
+2. **Query cache** — serve and **cache** chain read APIs (participants, epochs,
+   params, escrows, etc.) so every consumer does not dial gRPC/RPC independently.
+
+That separation keeps dapi and devshardd focused on their domain logic while
+edge-api owns **how** the node talks to the chain. The same HTTP/gRPC read
+surface and event fan-out can be **reused later** by **dashboard and monitoring
+systems** (status pages, ops tooling, external observers) without embedding
+chain clients in each product binary.
 
 Today edge-api is a stateless read-only proxy for 22 Tier A routes. We extend it
 to be **the** chain-access layer for the whole node.
@@ -100,8 +120,8 @@ to be **the** chain-access layer for the whole node.
 - Relocate the chain event listener that lives in dapi
   (`decentralized-api/internal/event_listener/`) into edge-api.
 - edge-api subscribes to the chain (CometBFT WebSocket `NewBlock` + RPC
-  `BlockResults` per-tx events) and **re-publishes** normalized events to all
-  consumers (dapi services, devshardd) via a pub/sub channel.
+  `BlockResults` per-tx events) and **re-publishes** normalized events to
+  **NATS** and other consumers (dapi services, devshardd) via pub/sub.
 - Consumers (dapi node-manager, PoC services, devshardd) **subscribe to
   edge-api events** instead of opening their own chain subscriptions. This
   removes N independent chain subscriptions and centralizes block processing.
@@ -132,7 +152,8 @@ once**. So:
 | Fan-out / pub-sub of events | Propagate the leader's event stream to all instances and subscribers |
 
 > edge-api thus becomes a **highly-available proxy + cache for the
-> inference-chain**, and the **single source of chain events** for the node.
+> inference-chain**, the **single source of chain events** for the node, and a
+> stable integration point for future **dashboard / monitoring** consumers.
 
 ### 3.4 Consumers stop querying the chain directly
 
@@ -232,7 +253,54 @@ clustered NATS (JetStream)** shared by all instances.
 ## 6. Rolling updates
 
 Rolling updates apply per service and reuse the design in
-[../rolling-update.md](../rolling-update.md):
+[../rolling-update.md](../rolling-update.md). The HA stack depends on the same
+**drain semantics** at two layers: binary swap inside a live supervisor, and
+whole-host evacuation behind the sticky router.
+
+### Rolling-update concepts (summary)
+
+The [rolling-update plan](../rolling-update.md) defines how we roll out **new
+binaries without dropping in-flight work**. Three operator guarantees:
+
+1. Requests already accepted by an old instance may **finish** — we do not kill
+   while work is still running.
+2. A **new** instance must be **ready** before it receives traffic.
+3. After the new instance is reachable, **new** requests go to it; the old
+   instance **drains** until idle, then exits.
+
+**Blue/green + drain inside `versiond` (Part 1 §1.1).** When governance publishes
+a **same version name, new `sha256`** binary, `versiond` downloads the new
+`devshardd`, starts it on a **new port** while the old child keeps serving,
+waits for **`GET /ready`** (not just TCP accept), atomically swaps the in-process
+route table so new requests hit the new child, marks the old child **draining**
+(out of the route table but still alive), polls **in-flight count** until zero
+(or a drain timeout), then `SIGTERM` with a **long shutdown grace**. Old and new
+can overlap only when durable state lives in **shared Postgres** — SQLite is
+single-writer and cannot support concurrent children (Part 1 §1.2).
+
+**Two drain layers — do not conflate (Part 1 §1.7–§1.8).**
+
+| Event | Layer | Router involved? |
+|-------|--------|------------------|
+| Same name, new **sha256** (governance binary update) | **versiond** blue/green + devshardd child drain | **No** — `versiond-router` upstream unchanged |
+| **versiond host** removal, replace, or supervisor upgrade | **`versiond-router`** host evacuation | **Yes** — mark upstream `down`, drain pinned escrows, then stop the host |
+
+During a devshardd binary swap, sticky routing is unchanged: the router still
+points at `versiond-N:8080`; only the child port inside versiond swaps. Router
+drain is for when the **versiond process itself** must leave the pool (scale-down,
+host maintenance, versiond binary upgrade).
+
+**Signals the plan adds to `devshardd`:** `/healthz` (liveness), `/ready`
+(readiness gate for route swap), `/drain/status` (in-flight work), and configurable
+`DEVSHARD_SHUTDOWN_GRACE` so long SSE streams are not cut at 5s.
+
+**Kubernetes mapping (Part 2).** The same guarantees map to `RollingUpdate`
+(`maxUnavailable: 0`, `maxSurge: 1`), **readinessProbe** → `/ready`,
+**preStop** (drop from endpoints before `SIGTERM`), and
+**terminationGracePeriodSeconds** aligned with shutdown grace. Pod/host evacuation
+maps to Part 1 §1.8 (router drain), not the in-versiond binary swap.
+
+### How rolling updates apply in this HA proposal
 
 - **Stateless services** (edge-api, edge-srv echo workers, signer): standard
   rolling update — bring a new instance up, health-check, route to it, drain the
@@ -243,6 +311,9 @@ Rolling updates apply per service and reuse the design in
 - **versiond / devshardd** (same version, new binary): blue/green + drain inside
   versiond, with the **shared Postgres** making old+new overlap correct — see
   [../rolling-update.md](../rolling-update.md) §1.
+- **versiond host** replace, scale-down, or maintenance: drain at
+  **`versiond-router`** (mark upstream down, wait for pinned escrows idle, then
+  stop the host) — see [../rolling-update.md](../rolling-update.md) §1.8.
 - **NATS / Redis / Postgres**: run in their own HA/cluster modes; updated with
   their native rolling procedures, independent of app rollouts.
 

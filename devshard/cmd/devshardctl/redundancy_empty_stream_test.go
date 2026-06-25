@@ -157,12 +157,12 @@ func TestPhaseTransitionAbortReincludesParticipantAndSkipsSamples(t *testing.T) 
 		nonce:                      1,
 		escrowID:                   "escrow-test",
 		sendTime:                   time.Now().Add(-time.Second),
-		receiptTime:                time.Now().Add(-900 * time.Millisecond),
 		startedBeforePoCGeneration: true,
 		done:                       make(chan struct{}),
 		receiptCh:                  make(chan struct{}),
 		firstTokenCh:               make(chan struct{}),
 	}
+	inf.setReceiptAt(time.Now().Add(-900 * time.Millisecond))
 
 	setPoCPhaseStateFromSnapshot(ChainPhaseSnapshot{
 		EpochPhase:           epochPhaseInference,
@@ -195,13 +195,13 @@ func TestPhaseTransitionAbortAfterContentSkipsPenaltyButDoesNotRetry(t *testing.
 		nonce:                      1,
 		escrowID:                   "escrow-test",
 		sendTime:                   time.Now().Add(-time.Second),
-		receiptTime:                time.Now().Add(-900 * time.Millisecond),
 		startedBeforePoCGeneration: true,
 		err:                        errSimulatedWinnerTransport,
 		done:                       make(chan struct{}),
 		receiptCh:                  make(chan struct{}),
 		firstTokenCh:               make(chan struct{}),
 	}
+	inf.setReceiptAt(time.Now().Add(-900 * time.Millisecond))
 	inf.contentChunks.Store(1)
 
 	setPoCPhaseStateFromSnapshot(ChainPhaseSnapshot{
@@ -545,7 +545,8 @@ func TestIsEmptyStreamAttempt(t *testing.T) {
 		require.False(t, isEmptyStreamAttempt(nil))
 	})
 	t.Run("probe_never_empty", func(t *testing.T) {
-		inf := &inflight{probe: true, receiptTime: time.Now()}
+		inf := &inflight{probe: true}
+		inf.setReceiptAt(time.Now())
 		inf.outputChunks.Store(2)
 		require.False(t, isEmptyStreamAttempt(inf))
 	})
@@ -564,12 +565,14 @@ func TestIsEmptyStreamAttempt(t *testing.T) {
 	})
 	t.Run("receipt_bytes_no_content", func(t *testing.T) {
 		// Original empty-SSE pattern: role marker + [DONE] only.
-		inf := &inflight{receiptTime: time.Now()}
+		inf := &inflight{}
+		inf.setReceiptAt(time.Now())
 		inf.outputChunks.Store(2)
 		require.True(t, isEmptyStreamAttempt(inf))
 	})
 	t.Run("receipt_error_stream_not_empty", func(t *testing.T) {
-		inf := &inflight{receiptTime: time.Now(), errorSource: "error.BadRequestError"}
+		inf := &inflight{errorSource: "error.BadRequestError"}
+		inf.setReceiptAt(time.Now())
 		inf.outputChunks.Store(2)
 		require.False(t, isEmptyStreamAttempt(inf))
 		require.True(t, isErrorStreamAttempt(inf))
@@ -578,11 +581,13 @@ func TestIsEmptyStreamAttempt(t *testing.T) {
 	t.Run("receipt_no_bytes_at_all_stall", func(t *testing.T) {
 		// Stall pattern (369pqtgx-class): host got the receipt, then
 		// went silent for the full deadline. No bytes streamed at all.
-		inf := &inflight{receiptTime: time.Now()}
+		inf := &inflight{}
+		inf.setReceiptAt(time.Now())
 		require.True(t, isEmptyStreamAttempt(inf))
 	})
 	t.Run("receipt_bytes_with_content", func(t *testing.T) {
-		inf := &inflight{receiptTime: time.Now()}
+		inf := &inflight{}
+		inf.setReceiptAt(time.Now())
 		inf.outputChunks.Store(3)
 		inf.contentChunks.Store(1)
 		require.False(t, isEmptyStreamAttempt(inf))
@@ -648,11 +653,11 @@ func TestRaceWriter_EmptyAttemptDoesNotWin(t *testing.T) {
 		hostID:       "empty-host",
 		escrowID:     "escrow-x",
 		nonce:        1,
-		receiptTime:  time.Now(),
 		done:         make(chan struct{}),
 		receiptCh:    make(chan struct{}),
 		firstTokenCh: make(chan struct{}),
 	}
+	inf.setReceiptAt(time.Now())
 	rw := &raceWriter{group: rg, nonce: 1, inf: inf}
 
 	role := []byte(`data: {"choices":[{"delta":{"role":"assistant"}}]}` + "\n\n")
@@ -678,11 +683,11 @@ func TestRaceWriter_ErrorStreamDoesNotWinAndDoesNotCountAsEmpty(t *testing.T) {
 		hostID:       "error-host",
 		escrowID:     "escrow-x",
 		nonce:        1,
-		receiptTime:  time.Now(),
 		done:         make(chan struct{}),
 		receiptCh:    make(chan struct{}),
 		firstTokenCh: make(chan struct{}),
 	}
+	inf.setReceiptAt(time.Now())
 	rw := &raceWriter{group: rg, nonce: 1, inf: inf}
 
 	payload := []byte(`data: {"error":{"code":400,"message":"bad request","type":"BadRequestError"}}` + "\n\n" +
@@ -762,21 +767,21 @@ func TestInflightFinished_StallHostNotFinished(t *testing.T) {
 	}
 
 	stall := &inflight{
-		hostID:      "stall-host",
-		nonce:       7,
-		receiptTime: time.Now(),
-		resp:        resp,
+		hostID: "stall-host",
+		nonce:  7,
+		resp:   resp,
 	}
+	stall.setReceiptAt(time.Now())
 	require.True(t, isEmptyStreamAttempt(stall), "stall pattern must be flagged")
 	require.False(t, inflightFinished(stall),
 		"stalled attempt with finish marker must NOT count as finished")
 
 	good := &inflight{
-		hostID:      "good-host",
-		nonce:       7,
-		receiptTime: time.Now(),
-		resp:        resp,
+		hostID: "good-host",
+		nonce:  7,
+		resp:   resp,
 	}
+	good.setReceiptAt(time.Now())
 	good.outputChunks.Store(2)
 	good.contentChunks.Store(1)
 	require.False(t, isEmptyStreamAttempt(good))
@@ -785,10 +790,10 @@ func TestInflightFinished_StallHostNotFinished(t *testing.T) {
 	errorStream := &inflight{
 		hostID:      "error-host",
 		nonce:       7,
-		receiptTime: time.Now(),
 		resp:        resp,
 		errorSource: "error.BadRequestError",
 	}
+	errorStream.setReceiptAt(time.Now())
 	errorStream.outputChunks.Store(2)
 	require.False(t, isEmptyStreamAttempt(errorStream))
 	require.False(t, inflightFinished(errorStream),

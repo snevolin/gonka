@@ -87,9 +87,7 @@ func TestChainProvider_InitialFetchPopulatesSnapshot_v0_2_13Chain(t *testing.T) 
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := NewChain(ctx, chainTestConfig(t, f))
 	require.NoError(t, err)
 
@@ -124,9 +122,7 @@ func TestChainProvider_v0_2_12Chain_ZeroNewFieldsPreserveCompiledDefaults(t *tes
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := NewChain(ctx, chainTestConfig(t, f))
 	require.NoError(t, err)
 	snap := p.Snapshot()
@@ -150,9 +146,7 @@ func TestChainProvider_AvailabilityTrackerReceivesUpdates(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	_, err := NewChain(ctx, chainTestConfig(t, f, func(c *ChainConfig) { c.Availability = tracker }))
 	require.NoError(t, err)
 
@@ -175,9 +169,7 @@ func TestChainProvider_InitialFetchErrorKeepsDefaultsAndRetries(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := NewChain(ctx, chainTestConfig(t, f, func(c *ChainConfig) {
 		c.RefreshInterval = 20 * time.Millisecond
 	}))
@@ -201,9 +193,7 @@ func TestChainProvider_OnEpochChangeFiresOnTransition(t *testing.T) {
 	var fires []struct{ old, new uint64 }
 	var mu sync.Mutex
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := NewChain(ctx, chainTestConfig(t, f, func(c *ChainConfig) {
 		c.RefreshInterval = 10 * time.Millisecond
 	}))
@@ -236,9 +226,7 @@ func TestChainProvider_OnEpochChangeDoesNotFireOnInitialApply(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := NewChain(ctx, chainTestConfig(t, f))
 	require.NoError(t, err)
 	cancelListen := p.OnEpochChange(func(_, _ uint64) { fires.Add(1) })
@@ -285,9 +273,7 @@ func TestChainProvider_LogprobsModeFallsBackToDefault(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := NewChain(ctx, chainTestConfig(t, f))
 	require.NoError(t, err)
 
@@ -295,9 +281,7 @@ func TestChainProvider_LogprobsModeFallsBackToDefault(t *testing.T) {
 }
 
 func TestChainProvider_RequiresFetcher(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	_, err := NewChain(ctx, ChainConfig{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Fetcher")

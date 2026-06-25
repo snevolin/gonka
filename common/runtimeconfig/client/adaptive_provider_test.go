@@ -141,6 +141,7 @@ func cleanupAdaptive(t *testing.T, cancel context.CancelFunc, p AdaptiveProvider
 		case <-time.After(time.Second):
 			t.Log("adaptive provider shutdown timed out")
 		}
+		waitForRunnersExit()
 	})
 }
 

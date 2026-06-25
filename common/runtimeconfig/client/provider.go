@@ -1,12 +1,11 @@
 package client
 
-import (
-	commrc "common/runtimeconfig"
-)
+import "common/runtimeconfig/types"
 
-// Snapshot and ApprovedVersion alias the common transport-agnostic types.
-type Snapshot = commrc.Snapshot
-type ApprovedVersion = commrc.ApprovedVersion
+// Snapshot and ApprovedVersion alias the transport-agnostic types (types/
+// only — no chain/cosmos imports in this package).
+type Snapshot = types.Snapshot
+type ApprovedVersion = types.ApprovedVersion
 
 // EpochChangeListener fires once per CurrentEpochID transition observed by the
 // provider after the first successful apply.

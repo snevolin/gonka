@@ -57,9 +57,7 @@ func TestGRPCProvider_InitialFetchSuccess(t *testing.T) {
 	srv.SetHandlers(testserver.FullConfig(TestRuntimeConfigProto(100, 1, "raw")))
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 
@@ -79,9 +77,7 @@ func TestGRPCProvider_LongPoll_AppliesOnChange(t *testing.T) {
 	)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 	waitForHeight(t, p, 100)
@@ -101,9 +97,7 @@ func TestGRPCProvider_LongPoll_UnchangedKeepsSnapshot(t *testing.T) {
 	client := testserver.Dial(t, srv)
 
 	var epochFires atomic.Int32
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 	waitForHeight(t, p, 100)
@@ -124,9 +118,7 @@ func TestGRPCProvider_LongPoll_NextRequestUsesNewHeight(t *testing.T) {
 	)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 	waitForHeight(t, p, 100)
@@ -154,9 +146,7 @@ func TestGRPCProvider_ServerNotSyncedPausesBetweenPolls(t *testing.T) {
 	srv.SetHandlers(handlers...)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	cfg := testConfig(t, client, func(c *Config) {
 		c.ErrorBackoffMin = 50 * time.Millisecond
 	})
@@ -177,9 +167,7 @@ func TestGRPCProvider_LongPoll_SendsConfiguredMaxWait(t *testing.T) {
 	srv.SetHandlers(testserver.FullConfig(TestRuntimeConfigProto(1, 0, "raw")))
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	cfg := testConfig(t, client, func(c *Config) { c.ServerMaxWait = 45 * time.Second })
 	_, err := New(ctx, cfg)
 	require.NoError(t, err)
@@ -214,9 +202,7 @@ func TestGRPCProvider_LongPoll_ClientDeadlineIsServerMaxWaitPlusSlack(t *testing
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	serverWait := 200 * time.Millisecond
 	slack := 50 * time.Millisecond
 	_, err := New(ctx, testConfig(t, rec, func(c *Config) {
@@ -269,9 +255,7 @@ func TestGRPCProvider_LongPoll_ServerTimeoutDoesNotApply(t *testing.T) {
 	srv.SetHandlers(handlers...)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 	waitForHeight(t, p, 100)
@@ -290,9 +274,7 @@ func TestGRPCProvider_Unimplemented_ExitsLoop(t *testing.T) {
 	)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	_, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 
@@ -319,9 +301,7 @@ func TestGRPCProvider_LongPoll_ErrorBackoff(t *testing.T) {
 	)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	cfg := testConfig(t, client)
 	p, err := New(ctx, cfg)
 	require.NoError(t, err)
@@ -342,9 +322,7 @@ func TestGRPCProvider_BackCompat_OldServer_FastUnchangedThrottledByFloor(t *test
 	srv.SetHandlers(handlers...)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	_, err := New(ctx, testConfig(t, client, func(c *Config) {
 		c.UnchangedRetryFloor = floorPtr
 		c.ServerMaxWait = time.Second
@@ -368,9 +346,7 @@ func TestGRPCProvider_BackCompat_OldServer_StillAppliesOnChange(t *testing.T) {
 	srv.SetHandlers(handlers...)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client, func(c *Config) {
 		f := 5 * time.Millisecond
 		c.UnchangedRetryFloor = &f
@@ -397,9 +373,7 @@ func TestGRPCProvider_BackCompat_NewServer_NoFloorPenalty(t *testing.T) {
 
 	floor := 500 * time.Millisecond
 	floorPtr := &floor
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	start := time.Now()
 	_, err := New(ctx, testConfig(t, client, func(c *Config) {
 		c.ServerMaxWait = serverWait
@@ -422,9 +396,7 @@ func TestGRPCProvider_BackCompat_SendsMaxWaitSeconds(t *testing.T) {
 	srv.SetHandlers(testserver.FullConfig(TestRuntimeConfigProto(1, 0, "raw")))
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	wait := 37 * time.Second
 	_, err := New(ctx, testConfig(t, client, func(c *Config) { c.ServerMaxWait = wait }))
 	require.NoError(t, err)
@@ -470,9 +442,7 @@ func TestGRPCProvider_LongPoll_NoConcurrentCalls(t *testing.T) {
 	)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	_, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 
@@ -482,7 +452,6 @@ func TestGRPCProvider_LongPoll_NoConcurrentCalls(t *testing.T) {
 	}
 	assert.Equal(t, int32(1), srv.MaxInFlight())
 	srv.ReleaseBlocked()
-	cancel()
 }
 
 func TestGRPCProvider_OnEpochChange_FiresOncePerTransition(t *testing.T) {
@@ -497,9 +466,7 @@ func TestGRPCProvider_OnEpochChange_FiresOncePerTransition(t *testing.T) {
 	)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 	cancelListen := p.OnEpochChange(func(old, new uint64) {
@@ -526,9 +493,7 @@ func TestGRPCProvider_OnEpochChange_NoFireOnInitialApply(t *testing.T) {
 	srv.SetHandlers(testserver.FullConfig(TestRuntimeConfigProto(5, 9, "raw")))
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 	cancelListen := p.OnEpochChange(func(_, _ uint64) { fires.Add(1) })
@@ -548,9 +513,7 @@ func TestGRPCProvider_OnEpochChange_NoFireOnUnchanged(t *testing.T) {
 	)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 	cancelListen := p.OnEpochChange(func(_, _ uint64) { fires.Add(1) })
@@ -570,9 +533,7 @@ func TestGRPCProvider_OnEpochChange_Cancel(t *testing.T) {
 	)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 	waitForHeight(t, p, 1)
@@ -593,9 +554,7 @@ func TestGRPCProvider_OnEpochChange_PanicRecovered(t *testing.T) {
 	)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 	waitForHeight(t, p, 1)
@@ -615,9 +574,7 @@ func TestGRPCProvider_Availability_RecordsServedAt(t *testing.T) {
 	)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client, func(c *Config) { c.Availability = tracker }))
 	require.NoError(t, err)
 	waitForHeight(t, p, 10)
@@ -642,9 +599,7 @@ func TestGRPCProvider_RaceSnapshot(t *testing.T) {
 	srv.SetHandlers(handlers...)
 	client := testserver.Dial(t, srv)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+	ctx := testContext(t)
 	p, err := New(ctx, testConfig(t, client))
 	require.NoError(t, err)
 

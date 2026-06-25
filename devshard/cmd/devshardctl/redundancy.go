@@ -812,12 +812,12 @@ type inflight struct {
 	startedBeforePoCGeneration bool
 	phaseTransitionAborted     bool
 
-	receiptOnce sync.Once
-	receiptTime time.Time
-	receiptCh   chan struct{} // closed when receipt arrives
+	receiptOnce      sync.Once
+	receiptTimeNano  atomic.Int64 // unix nano; 0 means not received
+	receiptCh        chan struct{} // closed when receipt arrives
 
 	tokenOnce       sync.Once
-	firstToken      time.Time
+	firstTokenNano  atomic.Int64 // unix nano; 0 means no content yet
 	firstTokenCh    chan struct{}
 	outputChunks    atomic.Int64
 	contentChunks   atomic.Int64
@@ -872,6 +872,44 @@ type inflight struct {
 	// after the winner has settled, so their transport goroutines return
 	// promptly and HandleTimeout can run against the abandoned nonce.
 	cancel context.CancelFunc
+}
+
+func (inf *inflight) receiptAt() time.Time {
+	if n := inf.receiptTimeNano.Load(); n != 0 {
+		return time.Unix(0, n)
+	}
+	return time.Time{}
+}
+
+func (inf *inflight) hasReceipt() bool {
+	return inf.receiptTimeNano.Load() != 0
+}
+
+func (inf *inflight) setReceiptAt(t time.Time) {
+	if t.IsZero() {
+		inf.receiptTimeNano.Store(0)
+		return
+	}
+	inf.receiptTimeNano.Store(t.UnixNano())
+}
+
+func (inf *inflight) firstTokenAt() time.Time {
+	if n := inf.firstTokenNano.Load(); n != 0 {
+		return time.Unix(0, n)
+	}
+	return time.Time{}
+}
+
+func (inf *inflight) hasFirstToken() bool {
+	return inf.firstTokenNano.Load() != 0
+}
+
+func (inf *inflight) setFirstTokenAt(t time.Time) {
+	if t.IsZero() {
+		inf.firstTokenNano.Store(0)
+		return
+	}
+	inf.firstTokenNano.Store(t.UnixNano())
 }
 
 type attemptStall struct {
@@ -1165,8 +1203,10 @@ func (rw *raceWriter) ctxErr() error {
 func (rw *raceWriter) Write(p []byte) (int, error) {
 	now := time.Now()
 	rw.inf.finishActiveStall(now)
+	firstOutputChunk := false
 	rw.inf.tokenOnce.Do(func() {
-		rw.inf.firstToken = now
+		firstOutputChunk = true
+		rw.inf.setFirstTokenAt(now)
 		if rw.inf.firstTokenCh != nil {
 			close(rw.inf.firstTokenCh)
 		}
@@ -1215,7 +1255,7 @@ func (rw *raceWriter) Write(p []byte) (int, error) {
 	winnerNonce := rw.group.winner
 	rw.group.mu.Unlock()
 
-	if rw.inf.firstToken.Equal(now) {
+	if firstOutputChunk {
 		route := "loser"
 		if isWinner {
 			route = "winner"
@@ -1488,8 +1528,9 @@ func (e *Redundancy) startInflight(ctx context.Context, inf *inflight, race *rac
 	rw := &raceWriter{group: race, nonce: inf.nonce, inf: inf}
 	receiptHandler := func() {
 		inf.receiptOnce.Do(func() {
-			inf.receiptTime = time.Now()
-			logInferenceStage(ctx, inf.escrowID, inf.nonce, "receipt_received", "host", inf.hostID, "elapsed_ms", inf.receiptTime.Sub(inf.sendTime).Milliseconds())
+			now := time.Now()
+			inf.setReceiptAt(now)
+			logInferenceStage(ctx, inf.escrowID, inf.nonce, "receipt_received", "host", inf.hostID, "elapsed_ms", now.Sub(inf.sendTime).Milliseconds())
 			close(inf.receiptCh)
 		})
 	}
@@ -1792,7 +1833,7 @@ func winnerHardTimeoutDeadline(inf *inflight) (time.Time, bool) {
 }
 
 func waitForFirstTokenUntil(ctx context.Context, inf *inflight, deadline time.Time) bool {
-	if !inf.firstToken.IsZero() {
+	if inf.hasFirstToken() {
 		return true
 	}
 	d := time.Until(deadline)
@@ -1805,9 +1846,9 @@ func waitForFirstTokenUntil(ctx context.Context, inf *inflight, deadline time.Ti
 	case <-inf.firstTokenCh:
 		return true
 	case <-inf.done:
-		return !inf.firstToken.IsZero()
+		return inf.hasFirstToken()
 	case <-timer.C:
-		return !inf.firstToken.IsZero()
+		return inf.hasFirstToken()
 	case <-ctx.Done():
 		return false
 	}
@@ -2248,7 +2289,7 @@ func (e *Redundancy) escalationForInflight(inf *inflight, params user.InferenceP
 	if inf.sendTime.IsZero() {
 		return escalationTrigger{}, false
 	}
-	if inf.receiptTime.IsZero() {
+	if !inf.hasReceipt() {
 		return escalationTrigger{
 			inf:      inf,
 			deadline: inf.sendTime.Add(receiptTimeoutForInput(params.InputLength)),
@@ -2259,7 +2300,7 @@ func (e *Redundancy) escalationForInflight(inf *inflight, params user.InferenceP
 	if !params.Stream {
 		return escalationTrigger{}, false
 	}
-	if !inf.firstToken.IsZero() {
+	if inf.hasFirstToken() {
 		return escalationTrigger{}, false
 	}
 	return escalationTrigger{
@@ -2303,13 +2344,13 @@ func (e *Redundancy) monitorInflight(ctx context.Context, inf *inflight, race *r
 				"elapsed_ms", time.Since(inf.sendTime).Milliseconds(),
 				"output_chunks", inf.outputChunks.Load(),
 			}
-			if !inf.receiptTime.IsZero() {
+			if inf.hasReceipt() {
 				stage = "waiting_for_first_token"
-				fields = append(fields, "since_receipt_ms", time.Since(inf.receiptTime).Milliseconds())
+				fields = append(fields, "since_receipt_ms", time.Since(inf.receiptAt()).Milliseconds())
 			}
-			if !inf.firstToken.IsZero() {
+			if inf.hasFirstToken() {
 				stage = "streaming_inflight"
-				fields = append(fields, "since_first_token_ms", time.Since(inf.firstToken).Milliseconds())
+				fields = append(fields, "since_first_token_ms", time.Since(inf.firstTokenAt()).Milliseconds())
 				if lastChunkAt := inf.lastChunkAt.Load(); lastChunkAt > 0 {
 					fields = append(fields, "since_last_chunk_ms", time.Since(time.Unix(0, lastChunkAt)).Milliseconds())
 				}
@@ -2742,7 +2783,7 @@ func isEmptyStreamAttempt(inf *inflight) bool {
 	if inf == nil || inf.probe {
 		return false
 	}
-	if inf.receiptTime.IsZero() {
+	if !inf.hasReceipt() {
 		return false
 	}
 	if isErrorStreamAttempt(inf) {
@@ -2969,8 +3010,8 @@ func (e *Redundancy) recordPostContentWinnerFailureOnce(inf *inflight, params us
 			ParticipantKey: participantKey,
 			Responsive:     false,
 			SendTime:       inf.sendTime,
-			ReceiptTime:    inf.receiptTime,
-			FirstToken:     inf.firstToken,
+			ReceiptTime:    inf.receiptAt(),
+			FirstToken:     inf.firstTokenAt(),
 			InputTokens:    params.InputLength,
 		}
 		if !inf.sendTime.IsZero() {
@@ -3347,11 +3388,11 @@ func (e *Redundancy) buildInvolvement(inf *inflight, winnerNonce uint64, params 
 		ExcludePairwise: inf.excludePairwise,
 	}
 	if !inf.sendTime.IsZero() {
-		if !inf.receiptTime.IsZero() {
-			hi.ReceiptTimeMs = float64(inf.receiptTime.Sub(inf.sendTime).Milliseconds())
+		if inf.hasReceipt() {
+			hi.ReceiptTimeMs = float64(inf.receiptAt().Sub(inf.sendTime).Milliseconds())
 		}
-		if !inf.firstToken.IsZero() {
-			hi.FirstTokenMs = float64(inf.firstToken.Sub(inf.sendTime).Milliseconds())
+		if inf.hasFirstToken() {
+			hi.FirstTokenMs = float64(inf.firstTokenAt().Sub(inf.sendTime).Milliseconds())
 		}
 		hi.TotalTimeMs = float64(time.Since(inf.sendTime).Milliseconds())
 	}
@@ -3379,8 +3420,8 @@ func (e *Redundancy) recordSample(inf *inflight, params user.InferenceParams, re
 		ParticipantKey: participantKey,
 		Responsive:     responsive,
 		SendTime:       inf.sendTime,
-		ReceiptTime:    inf.receiptTime,
-		FirstToken:     inf.firstToken,
+		ReceiptTime:    inf.receiptAt(),
+		FirstToken:     inf.firstTokenAt(),
 		InputTokens:    params.InputLength,
 	}
 	if !inf.sendTime.IsZero() {
