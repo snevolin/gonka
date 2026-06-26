@@ -603,6 +603,8 @@ func (m *HostManager) existingServer(escrowID string) (*transport.Server, bool) 
 }
 
 func (m *HostManager) hostOpts(epochID uint64) []host.HostOption {
+	// Do not add host.WithGrace here. StalenessChecker withholding is not used in
+	// production; settlement-drain accounting handles censored finishes instead.
 	opts := []host.HostOption{
 		host.WithValidator(m.validator),
 		host.WithValidationCompletionRecorder(m.validationRecorder),
