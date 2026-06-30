@@ -43,18 +43,27 @@ func snapshotFromAPIConfig(snap apiconfig.RuntimeConfigSnapshot) runtimeconfig.S
 			SHA256: v.SHA256,
 		}
 	}
+	thresholds := make([]runtimeconfig.ModelValidationThreshold, len(snap.ModelValidationThresholds))
+	for i, t := range snap.ModelValidationThresholds {
+		thresholds[i] = runtimeconfig.ModelValidationThreshold{
+			ModelID:  t.ModelID,
+			Value:    t.Value,
+			Exponent: t.Exponent,
+		}
+	}
 	return runtimeconfig.Snapshot{
-		ParamsBlockHeight:       snap.ParamsBlockHeight,
-		CurrentEpochID:          snap.CurrentEpochID,
-		LogprobsMode:            snap.LogprobsMode,
-		DevshardRequestsEnabled: snap.DevshardRequestsEnabled,
-		MaxNonce:                snap.MaxNonce,
-		ApprovedVersions:        versions,
-		ServedAt:                snap.ServedAt,
-		RefusalTimeout:          snap.RefusalTimeout,
-		ExecutionTimeout:        snap.ExecutionTimeout,
-		ValidationRate:          snap.ValidationRate,
-		VoteThresholdFactor:     snap.VoteThresholdFactor,
+		ParamsBlockHeight:         snap.ParamsBlockHeight,
+		CurrentEpochID:            snap.CurrentEpochID,
+		LogprobsMode:              snap.LogprobsMode,
+		DevshardRequestsEnabled:   snap.DevshardRequestsEnabled,
+		MaxNonce:                  snap.MaxNonce,
+		ApprovedVersions:          versions,
+		ServedAt:                  snap.ServedAt,
+		RefusalTimeout:            snap.RefusalTimeout,
+		ExecutionTimeout:          snap.ExecutionTimeout,
+		ValidationRate:            snap.ValidationRate,
+		VoteThresholdFactor:       snap.VoteThresholdFactor,
+		ModelValidationThresholds: thresholds,
 	}
 }
 

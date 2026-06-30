@@ -30,6 +30,10 @@ type ConfigManager struct {
 	KoanProvider             koanf.Provider
 	WriterProvider           WriteCloserProvider
 	sqlDb                    SqlDatabase
+	// modelValidationThresholds holds per-model validation thresholds for the
+	// current epoch (guarded by mutex). Refreshed on epoch change from
+	// EpochGroupData; published on the runtime-config long-poll snapshot.
+	modelValidationThresholds []ModelValidationThreshold
 	mutex                    sync.RWMutex
 	runtimePublishMu         sync.RWMutex
 	runtimePublished         runtimePublishedMarker
@@ -334,15 +338,18 @@ func (cm *ConfigManager) liveRuntimeConfigContent() runtimeConfigContent {
 	dv := cm.currentConfig.DevshardVersionsCache
 	versions := make([]DevshardVersion, len(dv.Versions))
 	copy(versions, dv.Versions)
+	thresholds := make([]ModelValidationThreshold, len(cm.modelValidationThresholds))
+	copy(thresholds, cm.modelValidationThresholds)
 	return runtimeConfigContent{
-		LogprobsMode:            vp.LogprobsMode,
-		DevshardRequestsEnabled: dv.DevshardRequestsEnabled,
-		MaxNonce:                dv.MaxNonce,
-		ApprovedVersions:        versions,
-		RefusalTimeout:          dv.RefusalTimeout,
-		ExecutionTimeout:        dv.ExecutionTimeout,
-		ValidationRate:          dv.ValidationRate,
-		VoteThresholdFactor:     dv.VoteThresholdFactor,
+		LogprobsMode:              vp.LogprobsMode,
+		DevshardRequestsEnabled:   dv.DevshardRequestsEnabled,
+		MaxNonce:                  dv.MaxNonce,
+		ApprovedVersions:          versions,
+		RefusalTimeout:            dv.RefusalTimeout,
+		ExecutionTimeout:          dv.ExecutionTimeout,
+		ValidationRate:            dv.ValidationRate,
+		VoteThresholdFactor:       dv.VoteThresholdFactor,
+		ModelValidationThresholds: thresholds,
 	}
 }
 
@@ -440,6 +447,28 @@ func (cm *ConfigManager) GetDevshardVersions() DevshardVersionsCache {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 	return cm.currentConfig.DevshardVersionsCache
+}
+
+// SetModelValidationThresholds replaces the cached per-model validation
+// thresholds for the current epoch. Published on the next
+// ApplyRuntimeConfigBlockIfChanged when content changes.
+func (cm *ConfigManager) SetModelValidationThresholds(thresholds []ModelValidationThreshold) {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+	cp := make([]ModelValidationThreshold, len(thresholds))
+	copy(cp, thresholds)
+	cm.modelValidationThresholds = cp
+	logging.Debug("runtime_config: model validation thresholds refreshed", types.Config,
+		"count", len(cp))
+}
+
+// GetModelValidationThresholds returns a copy of the cached per-model thresholds.
+func (cm *ConfigManager) GetModelValidationThresholds() []ModelValidationThreshold {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	cp := make([]ModelValidationThreshold, len(cm.modelValidationThresholds))
+	copy(cp, cm.modelValidationThresholds)
+	return cp
 }
 
 func (cm *ConfigManager) GetHeight() int64 {

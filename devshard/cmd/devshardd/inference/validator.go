@@ -36,10 +36,12 @@ type Validator struct {
 	phase        *chain.Phase
 	boundVersion string
 	chainParams  ChainParamsProvider
+	thresholds   ValidationThresholdResolver
 }
 
 // NewValidator creates a Validator. boundVersion is the runtime version string used
-// to construct the payload request path.
+// to construct the payload request path. thresholds resolves the per-model
+// similarity pass threshold (long-poll snapshot first, chain fallback).
 func NewValidator(
 	br bridge.MainnetBridge,
 	recorder PayloadAuthClient,
@@ -47,6 +49,7 @@ func NewValidator(
 	phase *chain.Phase,
 	boundVersion string,
 	chainParams ChainParamsProvider,
+	thresholds ValidationThresholdResolver,
 ) *Validator {
 	return &Validator{
 		bridge:       br,
@@ -55,6 +58,7 @@ func NewValidator(
 		phase:        phase,
 		boundVersion: boundVersion,
 		chainParams:  chainParams,
+		thresholds:   thresholds,
 	}
 }
 
@@ -102,7 +106,20 @@ func (v *Validator) Validate(ctx context.Context, req devshardpkg.ValidateReques
 	if err != nil {
 		return nil, classifyExecuteValidationErr(err)
 	}
-	return &devshardpkg.ValidateResult{Valid: result.IsSuccessful()}, nil
+
+	valid := result.IsSuccessful()
+	// For similarity outcomes, apply the per-model validation threshold instead
+	// of the hardcoded default in IsSuccessful. Non-similarity results (length /
+	// token / invalid) remain hard failures.
+	if sim, ok := result.(*commonvalidation.SimilarityValidationResult); ok {
+		threshold, terr := v.thresholds.Resolve(ctx, epochID, req.Model)
+		if terr != nil {
+			return nil, observability.Classify(observability.ReasonValidationBuildErr, observability.WhereRuntimeValidate,
+				fmt.Errorf("resolve validation threshold: %w", terr))
+		}
+		valid = commonvalidation.SimilarityPassesThreshold(sim.Value, threshold)
+	}
+	return &devshardpkg.ValidateResult{Valid: valid}, nil
 }
 
 func (v *Validator) executeMLRequest(ctx context.Context, model string, body []byte) (*http.Response, error) {

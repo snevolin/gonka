@@ -19,4 +19,17 @@ type RuntimeConfigSnapshot struct {
 	ExecutionTimeout        int64
 	ValidationRate          uint32
 	VoteThresholdFactor     uint32
+	// ModelValidationThresholds carries the per-model inference validation
+	// thresholds for CurrentEpochID, sourced from EpochGroupData.ModelSnapshot.
+	// Lets devshardd apply per-model thresholds without per-validation chain
+	// queries.
+	ModelValidationThresholds []ModelValidationThreshold
+}
+
+// ModelValidationThreshold is a per-model inference validation threshold encoded
+// as Value * 10^Exponent (cosmos LegacyDec coefficient/exponent).
+type ModelValidationThreshold struct {
+	ModelID  string
+	Value    int64
+	Exponent int32
 }

@@ -6,6 +6,7 @@ import "common/runtimeconfig/types"
 // only — no chain/cosmos imports in this package).
 type Snapshot = types.Snapshot
 type ApprovedVersion = types.ApprovedVersion
+type ModelValidationThreshold = types.ModelValidationThreshold
 
 // EpochChangeListener fires once per CurrentEpochID transition observed by the
 // provider after the first successful apply.

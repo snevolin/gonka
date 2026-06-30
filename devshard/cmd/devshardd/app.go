@@ -194,6 +194,7 @@ func buildHostManager(
 
 	instanceAddr := chainRuntime.identity.GetSignerAddress()
 
+	thresholds := inference.NewValidationThresholdResolver(paramsSetup.Provider, chainBridge)
 	validator := inference.NewValidator(
 		chainBridge,
 		chainRuntime.identity,
@@ -201,6 +202,7 @@ func buildHostManager(
 		phase,
 		cfg.RuntimeVersion,
 		chainParams,
+		thresholds,
 	)
 
 	innerStore, err := devshardstorage.NewStorage(ctx, cfg.DataDir)

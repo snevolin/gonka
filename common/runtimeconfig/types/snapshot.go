@@ -18,6 +18,15 @@ type ApprovedVersion struct {
 	SHA256 string
 }
 
+// ModelValidationThreshold mirrors gen.ModelValidationThreshold: a per-model
+// inference validation threshold encoded as Value * 10^Exponent (cosmos
+// LegacyDec coefficient/exponent) to preserve exactness over the wire.
+type ModelValidationThreshold struct {
+	ModelID  string
+	Value    int64
+	Exponent int32
+}
+
 // Snapshot is the transport-agnostic view of chain-driven runtime params served
 // to devshardd via GetRuntimeConfig. Its fields mirror gen.RuntimeConfig 1:1 so
 // ToProto is a straight copy.
@@ -36,6 +45,10 @@ type Snapshot struct {
 	ExecutionTimeout        int64
 	ValidationRate          uint32
 	VoteThresholdFactor     uint32
+	// ModelValidationThresholds holds the per-model inference validation
+	// thresholds for CurrentEpochID. Empty on the chain-poll fallback path;
+	// consumers fall back to a direct chain query on miss.
+	ModelValidationThresholds []ModelValidationThreshold
 }
 
 // ToProto converts the snapshot to the wire type. Equivalent to the dapi
@@ -47,6 +60,14 @@ func (s Snapshot) ToProto() *gen.RuntimeConfig {
 			Name:   v.Name,
 			Binary: v.Binary,
 			Sha256: v.SHA256,
+		}
+	}
+	thresholds := make([]*gen.ModelValidationThreshold, len(s.ModelValidationThresholds))
+	for i, t := range s.ModelValidationThresholds {
+		thresholds[i] = &gen.ModelValidationThreshold{
+			ModelId:           t.ModelID,
+			ThresholdValue:    t.Value,
+			ThresholdExponent: t.Exponent,
 		}
 	}
 	return &gen.RuntimeConfig{
@@ -61,5 +82,6 @@ func (s Snapshot) ToProto() *gen.RuntimeConfig {
 		ExecutionTimeout:        s.ExecutionTimeout,
 		ValidationRate:          s.ValidationRate,
 		VoteThresholdFactor:     s.VoteThresholdFactor,
+		ValidationThresholds:    thresholds,
 	}
 }

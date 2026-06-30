@@ -72,8 +72,23 @@ type SimilarityValidationResult struct {
 	Value float64
 }
 
+// LegacySimilarityThreshold is the historical default pass bar used when no
+// per-model threshold is available. Prefer SimilarityPassesThreshold with an
+// explicit model threshold from chain/runtime config.
+const LegacySimilarityThreshold = 0.99
+
+// SimilarityPassesThreshold reports whether similarity clears the pass bar.
+func SimilarityPassesThreshold(similarity, threshold float64) bool {
+	return similarity > threshold
+}
+
+// DecimalToFloat converts a cosmos LegacyDec encoded as value * 10^exponent.
+func DecimalToFloat(value int64, exponent int32) float64 {
+	return float64(value) * math.Pow(10, float64(exponent))
+}
+
 func (r SimilarityValidationResult) IsSuccessful() bool {
-	return r.Value > 0.99
+	return SimilarityPassesThreshold(r.Value, LegacySimilarityThreshold)
 }
 
 // InvalidInferenceResult represents a validation failure with a reason.

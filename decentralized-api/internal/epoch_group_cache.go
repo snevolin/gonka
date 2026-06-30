@@ -4,10 +4,19 @@ import (
 	"common/logging"
 	"context"
 	"decentralized-api/cosmosclient"
+	"fmt"
 	"sync"
 
 	"github.com/productscience/inference/x/inference/types"
 )
+
+// EpochModelThreshold is a per-model inference validation threshold for an epoch,
+// encoded as Value * 10^Exponent (cosmos LegacyDec coefficient/exponent).
+type EpochModelThreshold struct {
+	ModelID  string
+	Value    int64
+	Exponent int32
+}
 
 const maxCachedEpochs = 2
 
@@ -147,6 +156,42 @@ func (c *EpochGroupDataCache) IsActiveParticipant(ctx context.Context, epochInde
 		return exists, nil
 	}
 	return false, nil
+}
+
+// GetModelValidationThresholds returns the per-model validation thresholds for
+// the epoch's models. It reads the parent epoch group (cached) for the model
+// list, then queries each model sub-group for its ModelSnapshot threshold.
+// Intended to be called on epoch change (N+1 queries per epoch), so devshardd
+// can read thresholds from the long-poll snapshot instead of querying chain.
+func (c *EpochGroupDataCache) GetModelValidationThresholds(ctx context.Context, epochIndex uint64) ([]EpochModelThreshold, error) {
+	parent, err := c.GetEpochGroupData(ctx, epochIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	qc := c.recorder.NewInferenceQueryClient()
+	out := make([]EpochModelThreshold, 0, len(parent.SubGroupModels))
+	for _, model := range parent.SubGroupModels {
+		resp, err := qc.EpochGroupData(ctx, &types.QueryGetEpochGroupDataRequest{
+			EpochIndex: epochIndex,
+			ModelId:    model,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("epoch group data epoch=%d model=%s: %w", epochIndex, model, err)
+		}
+		ms := resp.EpochGroupData.ModelSnapshot
+		if ms == nil || ms.ValidationThreshold == nil {
+			logging.Warn("model snapshot missing validation threshold", types.Config,
+				"epoch", epochIndex, "model", model)
+			continue
+		}
+		out = append(out, EpochModelThreshold{
+			ModelID:  model,
+			Value:    ms.ValidationThreshold.Value,
+			Exponent: ms.ValidationThreshold.Exponent,
+		})
+	}
+	return out, nil
 }
 
 // pruneOldest removes epochs older than currentEpoch - 1

@@ -26,18 +26,30 @@ func SnapshotFromProto(c *gen.RuntimeConfig) Snapshot {
 	if c.GetServedAtUnix() == 0 {
 		servedAt = time.Time{}
 	}
+	thresholds := make([]ModelValidationThreshold, 0, len(c.GetValidationThresholds()))
+	for _, t := range c.GetValidationThresholds() {
+		if t == nil {
+			continue
+		}
+		thresholds = append(thresholds, ModelValidationThreshold{
+			ModelID:  t.GetModelId(),
+			Value:    t.GetThresholdValue(),
+			Exponent: t.GetThresholdExponent(),
+		})
+	}
 	return Snapshot{
-		ParamsBlockHeight:       c.GetParamsBlockHeight(),
-		CurrentEpochID:          c.GetCurrentEpochId(),
-		LogprobsMode:            c.GetLogprobsMode(),
-		DevshardRequestsEnabled: c.GetDevshardRequestsEnabled(),
-		MaxNonce:                c.GetMaxNonce(),
-		ApprovedVersions:        versions,
-		ServedAt:                servedAt,
-		RefusalTimeout:          c.GetRefusalTimeout(),
-		ExecutionTimeout:        c.GetExecutionTimeout(),
-		ValidationRate:          c.GetValidationRate(),
-		VoteThresholdFactor:     c.GetVoteThresholdFactor(),
+		ParamsBlockHeight:         c.GetParamsBlockHeight(),
+		CurrentEpochID:            c.GetCurrentEpochId(),
+		LogprobsMode:              c.GetLogprobsMode(),
+		DevshardRequestsEnabled:   c.GetDevshardRequestsEnabled(),
+		MaxNonce:                  c.GetMaxNonce(),
+		ApprovedVersions:          versions,
+		ServedAt:                  servedAt,
+		RefusalTimeout:            c.GetRefusalTimeout(),
+		ExecutionTimeout:          c.GetExecutionTimeout(),
+		ValidationRate:            c.GetValidationRate(),
+		VoteThresholdFactor:       c.GetVoteThresholdFactor(),
+		ModelValidationThresholds: thresholds,
 	}
 }
 
@@ -55,6 +67,14 @@ func ProtoFromSnapshot(s Snapshot) *gen.RuntimeConfig {
 	if !s.ServedAt.IsZero() {
 		servedAt = s.ServedAt.Unix()
 	}
+	thresholds := make([]*gen.ModelValidationThreshold, 0, len(s.ModelValidationThresholds))
+	for _, t := range s.ModelValidationThresholds {
+		thresholds = append(thresholds, &gen.ModelValidationThreshold{
+			ModelId:           t.ModelID,
+			ThresholdValue:    t.Value,
+			ThresholdExponent: t.Exponent,
+		})
+	}
 	return &gen.RuntimeConfig{
 		ParamsBlockHeight:       s.ParamsBlockHeight,
 		CurrentEpochId:          s.CurrentEpochID,
@@ -67,5 +87,6 @@ func ProtoFromSnapshot(s Snapshot) *gen.RuntimeConfig {
 		ExecutionTimeout:        s.ExecutionTimeout,
 		ValidationRate:          s.ValidationRate,
 		VoteThresholdFactor:     s.VoteThresholdFactor,
+		ValidationThresholds:    thresholds,
 	}
 }

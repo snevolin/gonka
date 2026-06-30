@@ -398,8 +398,13 @@ type RuntimeConfig struct {
 	ExecutionTimeout        int64                  `protobuf:"varint,9,opt,name=execution_timeout,json=executionTimeout,proto3" json:"execution_timeout,omitempty"`
 	ValidationRate          uint32                 `protobuf:"varint,10,opt,name=validation_rate,json=validationRate,proto3" json:"validation_rate,omitempty"`
 	VoteThresholdFactor     uint32                 `protobuf:"varint,11,opt,name=vote_threshold_factor,json=voteThresholdFactor,proto3" json:"vote_threshold_factor,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// Per-model inference validation thresholds for the current epoch, sourced
+	// from EpochGroupData.ModelSnapshot.ValidationThreshold. Lets devshardd apply
+	// the per-model similarity threshold without per-validation chain queries;
+	// consumers fall back to a direct chain query on miss.
+	ValidationThresholds []*ModelValidationThreshold `protobuf:"bytes,12,rep,name=validation_thresholds,json=validationThresholds,proto3" json:"validation_thresholds,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *RuntimeConfig) Reset() {
@@ -509,6 +514,74 @@ func (x *RuntimeConfig) GetVoteThresholdFactor() uint32 {
 	return 0
 }
 
+func (x *RuntimeConfig) GetValidationThresholds() []*ModelValidationThreshold {
+	if x != nil {
+		return x.ValidationThresholds
+	}
+	return nil
+}
+
+type ModelValidationThreshold struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	ModelId string                 `protobuf:"bytes,1,opt,name=model_id,json=modelId,proto3" json:"model_id,omitempty"`
+	// Cosmos LegacyDec encoded as value * 10^exponent to preserve exactness.
+	ThresholdValue    int64 `protobuf:"varint,2,opt,name=threshold_value,json=thresholdValue,proto3" json:"threshold_value,omitempty"`
+	ThresholdExponent int32 `protobuf:"varint,3,opt,name=threshold_exponent,json=thresholdExponent,proto3" json:"threshold_exponent,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ModelValidationThreshold) Reset() {
+	*x = ModelValidationThreshold{}
+	mi := &file_nodemanager_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelValidationThreshold) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelValidationThreshold) ProtoMessage() {}
+
+func (x *ModelValidationThreshold) ProtoReflect() protoreflect.Message {
+	mi := &file_nodemanager_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelValidationThreshold.ProtoReflect.Descriptor instead.
+func (*ModelValidationThreshold) Descriptor() ([]byte, []int) {
+	return file_nodemanager_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ModelValidationThreshold) GetModelId() string {
+	if x != nil {
+		return x.ModelId
+	}
+	return ""
+}
+
+func (x *ModelValidationThreshold) GetThresholdValue() int64 {
+	if x != nil {
+		return x.ThresholdValue
+	}
+	return 0
+}
+
+func (x *ModelValidationThreshold) GetThresholdExponent() int32 {
+	if x != nil {
+		return x.ThresholdExponent
+	}
+	return 0
+}
+
 type ApprovedVersion struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -520,7 +593,7 @@ type ApprovedVersion struct {
 
 func (x *ApprovedVersion) Reset() {
 	*x = ApprovedVersion{}
-	mi := &file_nodemanager_proto_msgTypes[7]
+	mi := &file_nodemanager_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -532,7 +605,7 @@ func (x *ApprovedVersion) String() string {
 func (*ApprovedVersion) ProtoMessage() {}
 
 func (x *ApprovedVersion) ProtoReflect() protoreflect.Message {
-	mi := &file_nodemanager_proto_msgTypes[7]
+	mi := &file_nodemanager_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -545,7 +618,7 @@ func (x *ApprovedVersion) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovedVersion.ProtoReflect.Descriptor instead.
 func (*ApprovedVersion) Descriptor() ([]byte, []int) {
-	return file_nodemanager_proto_rawDescGZIP(), []int{7}
+	return file_nodemanager_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ApprovedVersion) GetName() string {
@@ -590,7 +663,7 @@ const file_nodemanager_proto_rawDesc = "" +
 	"\x10max_wait_seconds\x18\x02 \x01(\x05R\x0emaxWaitSeconds\"l\n" +
 	"\x18GetRuntimeConfigResponse\x12\x1c\n" +
 	"\tunchanged\x18\x01 \x01(\bR\tunchanged\x122\n" +
-	"\x06config\x18\x02 \x01(\v2\x1a.nodemanager.RuntimeConfigR\x06config\"\x8b\x04\n" +
+	"\x06config\x18\x02 \x01(\v2\x1a.nodemanager.RuntimeConfigR\x06config\"\xe7\x04\n" +
 	"\rRuntimeConfig\x12.\n" +
 	"\x13params_block_height\x18\x01 \x01(\x03R\x11paramsBlockHeight\x12(\n" +
 	"\x10current_epoch_id\x18\x02 \x01(\x04R\x0ecurrentEpochId\x12#\n" +
@@ -603,7 +676,12 @@ const file_nodemanager_proto_rawDesc = "" +
 	"\x11execution_timeout\x18\t \x01(\x03R\x10executionTimeout\x12'\n" +
 	"\x0fvalidation_rate\x18\n" +
 	" \x01(\rR\x0evalidationRate\x122\n" +
-	"\x15vote_threshold_factor\x18\v \x01(\rR\x13voteThresholdFactor\"U\n" +
+	"\x15vote_threshold_factor\x18\v \x01(\rR\x13voteThresholdFactor\x12Z\n" +
+	"\x15validation_thresholds\x18\f \x03(\v2%.nodemanager.ModelValidationThresholdR\x14validationThresholds\"\x8d\x01\n" +
+	"\x18ModelValidationThreshold\x12\x19\n" +
+	"\bmodel_id\x18\x01 \x01(\tR\amodelId\x12'\n" +
+	"\x0fthreshold_value\x18\x02 \x01(\x03R\x0ethresholdValue\x12-\n" +
+	"\x12threshold_exponent\x18\x03 \x01(\x05R\x11thresholdExponent\"U\n" +
 	"\x0fApprovedVersion\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06binary\x18\x02 \x01(\tR\x06binary\x12\x16\n" +
@@ -631,7 +709,7 @@ func file_nodemanager_proto_rawDescGZIP() []byte {
 }
 
 var file_nodemanager_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_nodemanager_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_nodemanager_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_nodemanager_proto_goTypes = []any{
 	(ReleaseOutcome)(0),              // 0: nodemanager.ReleaseOutcome
 	(*AcquireMLNodeRequest)(nil),     // 1: nodemanager.AcquireMLNodeRequest
@@ -641,23 +719,25 @@ var file_nodemanager_proto_goTypes = []any{
 	(*GetRuntimeConfigRequest)(nil),  // 5: nodemanager.GetRuntimeConfigRequest
 	(*GetRuntimeConfigResponse)(nil), // 6: nodemanager.GetRuntimeConfigResponse
 	(*RuntimeConfig)(nil),            // 7: nodemanager.RuntimeConfig
-	(*ApprovedVersion)(nil),          // 8: nodemanager.ApprovedVersion
+	(*ModelValidationThreshold)(nil), // 8: nodemanager.ModelValidationThreshold
+	(*ApprovedVersion)(nil),          // 9: nodemanager.ApprovedVersion
 }
 var file_nodemanager_proto_depIdxs = []int32{
 	0, // 0: nodemanager.ReleaseMLNodeRequest.outcome:type_name -> nodemanager.ReleaseOutcome
 	7, // 1: nodemanager.GetRuntimeConfigResponse.config:type_name -> nodemanager.RuntimeConfig
-	8, // 2: nodemanager.RuntimeConfig.approved_versions:type_name -> nodemanager.ApprovedVersion
-	1, // 3: nodemanager.NodeManager.AcquireMLNode:input_type -> nodemanager.AcquireMLNodeRequest
-	3, // 4: nodemanager.NodeManager.ReleaseMLNode:input_type -> nodemanager.ReleaseMLNodeRequest
-	5, // 5: nodemanager.NodeManager.GetRuntimeConfig:input_type -> nodemanager.GetRuntimeConfigRequest
-	2, // 6: nodemanager.NodeManager.AcquireMLNode:output_type -> nodemanager.AcquireMLNodeResponse
-	4, // 7: nodemanager.NodeManager.ReleaseMLNode:output_type -> nodemanager.ReleaseMLNodeResponse
-	6, // 8: nodemanager.NodeManager.GetRuntimeConfig:output_type -> nodemanager.GetRuntimeConfigResponse
-	6, // [6:9] is the sub-list for method output_type
-	3, // [3:6] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	9, // 2: nodemanager.RuntimeConfig.approved_versions:type_name -> nodemanager.ApprovedVersion
+	8, // 3: nodemanager.RuntimeConfig.validation_thresholds:type_name -> nodemanager.ModelValidationThreshold
+	1, // 4: nodemanager.NodeManager.AcquireMLNode:input_type -> nodemanager.AcquireMLNodeRequest
+	3, // 5: nodemanager.NodeManager.ReleaseMLNode:input_type -> nodemanager.ReleaseMLNodeRequest
+	5, // 6: nodemanager.NodeManager.GetRuntimeConfig:input_type -> nodemanager.GetRuntimeConfigRequest
+	2, // 7: nodemanager.NodeManager.AcquireMLNode:output_type -> nodemanager.AcquireMLNodeResponse
+	4, // 8: nodemanager.NodeManager.ReleaseMLNode:output_type -> nodemanager.ReleaseMLNodeResponse
+	6, // 9: nodemanager.NodeManager.GetRuntimeConfig:output_type -> nodemanager.GetRuntimeConfigResponse
+	7, // [7:10] is the sub-list for method output_type
+	4, // [4:7] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_nodemanager_proto_init() }
@@ -671,7 +751,7 @@ func file_nodemanager_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nodemanager_proto_rawDesc), len(file_nodemanager_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

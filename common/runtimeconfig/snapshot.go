@@ -6,3 +6,4 @@ import "common/runtimeconfig/types"
 // import them without linking common/chain or inference-chain.
 type Snapshot = types.Snapshot
 type ApprovedVersion = types.ApprovedVersion
+type ModelValidationThreshold = types.ModelValidationThreshold
