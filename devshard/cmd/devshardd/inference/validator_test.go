@@ -139,6 +139,76 @@ func TestLeaseValidator_Success_DoesNotSetSubmitted(t *testing.T) {
 	require.Empty(t, store.setResultCalls)
 }
 
+type stubThresholdResolver struct {
+	threshold float64
+	err       error
+}
+
+func (s stubThresholdResolver) Resolve(_ context.Context, _ uint64, _ string) (float64, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	return s.threshold, nil
+}
+
+type unknownValidationResult struct{}
+
+func (unknownValidationResult) IsSuccessful() bool                     { return true }
+func (unknownValidationResult) GetInferenceId() string               { return "unknown" }
+func (unknownValidationResult) GetValidationResponseBytes() []byte   { return nil }
+
+func TestEvaluateValidationResult_UsesModelThreshold(t *testing.T) {
+	resolver := stubThresholdResolver{threshold: 0.90}
+
+	tests := []struct {
+		name       string
+		similarity float64
+		want       bool
+	}{
+		{name: "above threshold passes", similarity: 0.91, want: true},
+		{name: "equal threshold fails", similarity: 0.90, want: false},
+		{name: "below threshold fails", similarity: 0.89, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := &commonvalidation.SimilarityValidationResult{Value: tt.similarity}
+			valid, err := evaluateValidationResult(context.Background(), result, 7, "model-a", resolver)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, valid)
+		})
+	}
+}
+
+func TestEvaluateValidationResult_KnownFailureTypesFailWithoutThreshold(t *testing.T) {
+	results := []commonvalidation.ValidationResult{
+		&commonvalidation.DifferentLengthValidationResult{},
+		&commonvalidation.DifferentTokensValidationResult{},
+		&commonvalidation.InvalidInferenceResult{},
+	}
+
+	for _, result := range results {
+		valid, err := evaluateValidationResult(context.Background(), result, 7, "model-a", nil)
+		require.NoError(t, err)
+		assert.False(t, valid)
+	}
+}
+
+func TestEvaluateValidationResult_UnknownTypeErrors(t *testing.T) {
+	valid, err := evaluateValidationResult(context.Background(), unknownValidationResult{}, 7, "model-a", nil)
+	require.Error(t, err)
+	assert.False(t, valid)
+}
+
+func TestEvaluateValidationResult_ThresholdResolveError(t *testing.T) {
+	resolver := stubThresholdResolver{err: errors.New("threshold unavailable")}
+	result := &commonvalidation.SimilarityValidationResult{Value: 0.95}
+
+	valid, err := evaluateValidationResult(context.Background(), result, 7, "model-a", resolver)
+	require.Error(t, err)
+	assert.False(t, valid)
+}
+
 func TestLeaseValidator_MarkValidationSubmitted_SetsSubmitted(t *testing.T) {
 	store := &stubLeases{
 		acquireFn: func(_ context.Context, _ string, _ uint64, _ uint64, _ string) (bool, error) {

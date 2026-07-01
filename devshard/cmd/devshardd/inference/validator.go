@@ -107,19 +107,38 @@ func (v *Validator) Validate(ctx context.Context, req devshardpkg.ValidateReques
 		return nil, classifyExecuteValidationErr(err)
 	}
 
-	valid := result.IsSuccessful()
-	// For similarity outcomes, apply the per-model validation threshold instead
-	// of the hardcoded default in IsSuccessful. Non-similarity results (length /
-	// token / invalid) remain hard failures.
-	if sim, ok := result.(*commonvalidation.SimilarityValidationResult); ok {
-		threshold, terr := v.thresholds.Resolve(ctx, epochID, req.Model)
-		if terr != nil {
-			return nil, observability.Classify(observability.ReasonValidationBuildErr, observability.WhereRuntimeValidate,
-				fmt.Errorf("resolve validation threshold: %w", terr))
-		}
-		valid = commonvalidation.SimilarityPassesThreshold(sim.Value, threshold)
+	valid, err := evaluateValidationResult(ctx, result, epochID, req.Model, v.thresholds)
+	if err != nil {
+		return nil, observability.Classify(observability.ReasonValidationBuildErr, observability.WhereRuntimeValidate,
+			fmt.Errorf("evaluate validation result: %w", err))
 	}
 	return &devshardpkg.ValidateResult{Valid: valid}, nil
+}
+
+// evaluateValidationResult decides pass/fail from a validation outcome. Similarity
+// results use the per-model threshold from chain/runtime config; length, token, and
+// invalid outcomes fail directly without a threshold lookup.
+func evaluateValidationResult(
+	ctx context.Context,
+	result commonvalidation.ValidationResult,
+	epochID uint64,
+	model string,
+	thresholds ValidationThresholdResolver,
+) (bool, error) {
+	switch r := result.(type) {
+	case *commonvalidation.SimilarityValidationResult:
+		threshold, err := thresholds.Resolve(ctx, epochID, model)
+		if err != nil {
+			return false, err
+		}
+		return commonvalidation.SimilarityPassesThreshold(r.Value, threshold), nil
+	case *commonvalidation.DifferentLengthValidationResult,
+		*commonvalidation.DifferentTokensValidationResult,
+		*commonvalidation.InvalidInferenceResult:
+		return false, nil
+	default:
+		return false, fmt.Errorf("unknown validation result type %T", result)
+	}
 }
 
 func (v *Validator) executeMLRequest(ctx context.Context, model string, body []byte) (*http.Response, error) {
