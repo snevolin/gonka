@@ -1,9 +1,9 @@
 package apiconfig
 
 import (
+	"common/logging"
 	"context"
 	"database/sql"
-	"common/logging"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -26,23 +26,20 @@ import (
 )
 
 type ConfigManager struct {
-	currentConfig            Config
-	KoanProvider             koanf.Provider
-	WriterProvider           WriteCloserProvider
-	sqlDb                    SqlDatabase
-	// modelValidationThresholds holds per-model validation thresholds for the
-	// current epoch (guarded by mutex). Refreshed on epoch change from
-	// EpochGroupData; published on the runtime-config long-poll snapshot.
+	currentConfig             Config
+	KoanProvider              koanf.Provider
+	WriterProvider            WriteCloserProvider
+	sqlDb                     SqlDatabase
 	modelValidationThresholds []ModelValidationThreshold
-	mutex                    sync.RWMutex
-	runtimePublishMu         sync.RWMutex
-	runtimePublished         runtimePublishedMarker
-	runtimeParamsBlockHeight int64 // last published revision height; guarded by runtimePublishMu
-	runtimeConfigNotifier    *RuntimeConfigNotifier
-	epochOnChangeMu          sync.Mutex
-	epochOnChange            EpochChangeListener // optional; set once at process startup
-	configDumpPath           string
-	sqlitePath               string
+	mutex                     sync.RWMutex
+	runtimePublishMu          sync.RWMutex
+	runtimePublished          runtimePublishedMarker
+	runtimeParamsBlockHeight  int64 // last published revision height; guarded by runtimePublishMu
+	runtimeConfigNotifier     *RuntimeConfigNotifier
+	epochOnChangeMu           sync.Mutex
+	epochOnChange             EpochChangeListener // optional; set once at process startup
+	configDumpPath            string
+	sqlitePath                string
 }
 
 type WriteCloserProvider interface {

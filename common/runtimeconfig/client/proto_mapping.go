@@ -26,7 +26,7 @@ func SnapshotFromProto(c *gen.RuntimeConfig) Snapshot {
 	if c.GetServedAtUnix() == 0 {
 		servedAt = time.Time{}
 	}
-	thresholds := make([]ModelValidationThreshold, 0, len(c.GetValidationThresholds()))
+	var thresholds []ModelValidationThreshold
 	for _, t := range c.GetValidationThresholds() {
 		if t == nil {
 			continue

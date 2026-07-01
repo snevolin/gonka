@@ -34,20 +34,17 @@ type Snapshot struct {
 	// ParamsBlockHeight is the chain block height at which the last published
 	// runtime revision was recorded. It advances with the published content
 	// snapshot; cache writes alone do not move it.
-	ParamsBlockHeight       int64
-	CurrentEpochID          uint64
-	LogprobsMode            string
-	DevshardRequestsEnabled bool
-	MaxNonce                uint32
-	ApprovedVersions        []ApprovedVersion
-	ServedAt                time.Time
-	RefusalTimeout          int64
-	ExecutionTimeout        int64
-	ValidationRate          uint32
-	VoteThresholdFactor     uint32
-	// ModelValidationThresholds holds the per-model inference validation
-	// thresholds for CurrentEpochID. Empty on the chain-poll fallback path;
-	// consumers fall back to a direct chain query on miss.
+	ParamsBlockHeight         int64
+	CurrentEpochID            uint64
+	LogprobsMode              string
+	DevshardRequestsEnabled   bool
+	MaxNonce                  uint32
+	ApprovedVersions          []ApprovedVersion
+	ServedAt                  time.Time
+	RefusalTimeout            int64
+	ExecutionTimeout          int64
+	ValidationRate            uint32
+	VoteThresholdFactor       uint32
 	ModelValidationThresholds []ModelValidationThreshold
 }
 

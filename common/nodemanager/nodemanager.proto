@@ -64,10 +64,6 @@ message RuntimeConfig {
   int64 execution_timeout = 9;
   uint32 validation_rate = 10;
   uint32 vote_threshold_factor = 11;
-  // Per-model inference validation thresholds for the current epoch, sourced
-  // from EpochGroupData.ModelSnapshot.ValidationThreshold. Lets devshardd apply
-  // the per-model similarity threshold without per-validation chain queries;
-  // consumers fall back to a direct chain query on miss.
   repeated ModelValidationThreshold validation_thresholds = 12;
 }
 
