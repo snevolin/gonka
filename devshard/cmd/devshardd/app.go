@@ -170,6 +170,19 @@ func buildMLNodeClient(addr string) (*mlnodeclient.Client, error) {
 	return mlClient, nil
 }
 
+func buildMLNodeManager(ctx context.Context) *mlnodeclient.Manager {
+	ttl := mlnodeclient.DefaultCacheTTL
+	if v := os.Getenv("MLNODE_CACHE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			ttl = d
+		}
+	}
+	mgr := mlnodeclient.NewManager(ttl)
+	mgr.Start(ctx)
+	slog.Info("mlnode cache", "ttl", ttl)
+	return mgr
+}
+
 func buildHostManager(
 	ctx context.Context,
 	cfg runtimeConfig,
@@ -190,7 +203,8 @@ func buildHostManager(
 	phase := chainRuntime.chainEvents.Phase()
 	chainBridge := chainRuntime.chainEvents.Bridge()
 	chainParams := paramsSetup.Provider
-	eng := inference.NewEngine(mlClient, payloadStore, chainParams, phase)
+	mlNodeMgr := buildMLNodeManager(ctx)
+	eng := inference.NewEngine(mlClient, mlNodeMgr, payloadStore, chainParams, phase)
 
 	instanceAddr := chainRuntime.identity.GetSignerAddress()
 

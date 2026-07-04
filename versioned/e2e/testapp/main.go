@@ -17,10 +17,14 @@ import (
 )
 
 // Version is the protocol slot name for e2e (maps to approved_versions.name).
+// versiond requires --print-protocol-version to equal the oracle slot name, so
+// e2e registers the slot as "testapp". A second binary can override via
+// -ldflags "-X main.Version=testapp2 -X main.BinaryVersion=testapp2".
 var Version = "testapp"
 
-// BinaryVersion is the build id printed by --print-binary-version.
-var BinaryVersion = "testapp-e2e"
+// BinaryVersion is the build id printed by --print-binary-version and exposed
+// as DEVSHARD_BINARY_LOG_VERSION (used as the HTTP "prefix" field).
+var BinaryVersion = "testapp"
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--print-binary-version" {

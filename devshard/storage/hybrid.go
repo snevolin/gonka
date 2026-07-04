@@ -386,7 +386,11 @@ func (h *HybridStorage) DeleteSealedInferences(escrowID string) error {
 }
 
 func (h *HybridStorage) ClearValidationObs(escrowID string) error {
-	return h.backend.ClearValidationObs(escrowID)
+	b, err := h.routed(escrowID)
+	if err != nil {
+		return err
+	}
+	return b.ClearValidationObs(escrowID)
 }
 
 func (h *HybridStorage) RecordValidationsAppliedOnce(escrowID string, entries []ValidationObsEntry) error {
