@@ -881,9 +881,10 @@ func (sm *StateMachine) applyValidation(msg *types.MsgValidation) error {
 		} else {
 			rec.VotesInvalid += weight
 			rec.Status = types.StatusChallenged
-			if err := sm.persistLiveInferenceObsLocked(msg.InferenceId, rec); err != nil {
-				return err
-			}
+			// Obs row is not part of post_state_root; a storage blip must not fail
+			// the tx (ApplyLocalBestEffort would drop it but keep the mutation).
+			// Recovery rebuilds obs from the diff journal; see autoSealLocked.
+			sm.persistLiveInferenceObsBestEffortLocked(msg.InferenceId, rec)
 			logging.Debug("inference finished -> challenged", "subsystem", "state",
 				"inference_id", msg.InferenceId,
 				"validator_slot", msg.ValidatorSlot,
@@ -984,9 +985,8 @@ func (sm *StateMachine) applyValidationVote(msg *types.MsgValidationVote) error 
 	}
 
 	if rec.Status == types.StatusValidated || rec.Status == types.StatusInvalidated {
-		if err := sm.persistLiveInferenceObsLocked(msg.InferenceId, rec); err != nil {
-			return err
-		}
+		// Same as challenge path: obs is observability-only, never consensus.
+		sm.persistLiveInferenceObsBestEffortLocked(msg.InferenceId, rec)
 	}
 
 	return sm.updateCommittedEntryLocked(msg.InferenceId, rec)

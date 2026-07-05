@@ -623,6 +623,20 @@ func (sm *StateMachine) persistLiveInferenceObsLocked(id uint64, rec *types.Infe
 	return sm.upsertInferenceObsLocked(id, sealNonce, rec)
 }
 
+// persistLiveInferenceObsBestEffortLocked upserts live inference obs for
+// observability only. Storage errors are logged and never fail the tx caller,
+// matching the auto-seal contract (recovery rebuilds from the diff journal).
+func (sm *StateMachine) persistLiveInferenceObsBestEffortLocked(id uint64, rec *types.InferenceRecord) {
+	if err := sm.persistLiveInferenceObsLocked(id, rec); err != nil {
+		logging.Warn("failed to persist live inference obs; continuing (best-effort, recovery rebuilds from diffs)",
+			"subsystem", "state",
+			"escrow_id", sm.state.EscrowID,
+			"inference_id", id,
+			"error", err,
+		)
+	}
+}
+
 // upsertInferenceObsLocked writes or updates the observability row for an inference.
 // On seal, DrainInferenceValidationObs moves live validation counters into sealed storage.
 // Caller must hold sm.mu.
