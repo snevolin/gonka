@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,9 +14,11 @@ import (
 	"time"
 
 	"common/chain"
+	"devshard/signing"
 	"devshard/testenv/config"
 	"devshard/testenv/mockchain/adminface"
 	"devshard/testenv/mockopenai"
+	"devshard/transport"
 
 	inferencetypes "github.com/productscience/inference/x/inference/types"
 	"github.com/stretchr/testify/require"
@@ -95,6 +98,48 @@ func RequireWarmKeyRevoked(t *testing.T, cfg *config.File, granter, warmAddress 
 	for _, g := range resp.GetGrantees() {
 		require.NotEqual(t, warmAddress, g.GetAddress(), "warm key still authorized for %s", granter)
 	}
+}
+
+// PostWarmKeySignedTransport posts a devshard transport request signed by a warm grantee key
+// through versiond-router. Returns the HTTP status (body is discarded).
+func PostWarmKeySignedTransport(t *testing.T, client *http.Client, routerHTTP, version, escrowID, pathSuffix, warmPrivateKeyHex string, body []byte) int {
+	t.Helper()
+	if client == nil {
+		client = HTTPClient()
+	}
+	signer, err := signing.SignerFromHex(warmPrivateKeyHex)
+	require.NoError(t, err)
+
+	ts := time.Now().Unix()
+	sig, err := transport.SignRequest(signer, escrowID, body, ts)
+	require.NoError(t, err)
+
+	url := RouterSessionURL(routerHTTP, version, escrowID, pathSuffix)
+	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	require.NoError(t, err)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set(transport.HeaderSignature, hex.EncodeToString(sig))
+	httpReq.Header.Set(transport.HeaderTimestamp, fmt.Sprintf("%d", ts))
+
+	resp, err := client.Do(httpReq)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
+// RequireWarmKeyTransportRejected asserts a warm-key signed devshard transport call is
+// rejected after grantee revocation (devshardd bridge + router auth path).
+func RequireWarmKeyTransportRejected(t *testing.T, client *http.Client, cfg *config.File, eps Endpoints, warmPrivateKeyHex string) {
+	t.Helper()
+	escrowID := GetGatewayEscrowID(t, client, eps.GatewayHTTP)
+	// Minimal gossip/nonce body: auth runs before handler validation.
+	body := []byte(`{"nonce":1,"slot_id":0,"state_hash":"","state_sig":"00"}`)
+	status := PostWarmKeySignedTransport(
+		t, client, eps.RouterHTTP, cfg.Versiond.VersionName, escrowID, "/gossip/nonce", warmPrivateKeyHex, body,
+	)
+	require.Equal(t, http.StatusForbidden, status,
+		"warm-key transport should be forbidden after grantee revocation (got HTTP %d)", status)
 }
 
 // DialMockChainGRPC dials the mock-chain inference gRPC port from a citest config.
@@ -248,30 +293,68 @@ func PostGatewayChatExpectStatus(t *testing.T, client *http.Client, gatewayURL, 
 	require.Equal(t, wantStatus, resp.StatusCode, "POST /v1/chat/completions: %s", string(body))
 }
 
-// PostGatewayChatExpectFailure posts non-stream chat and requires HTTP status >= 400 or transport timeout.
-func PostGatewayChatExpectFailure(t *testing.T, client *http.Client, gatewayURL, adminAPIKey string, req ChatCompletionRequest) int {
-	t.Helper()
+func postGatewayChatHTTPStatus(client *http.Client, gatewayURL, adminAPIKey string, req ChatCompletionRequest) (status int, transportErr error, body string) {
 	if client == nil {
 		client = &http.Client{Timeout: 2 * time.Minute}
 	}
 	data, err := json.Marshal(req)
-	require.NoError(t, err)
+	if err != nil {
+		return 0, err, ""
+	}
 	httpReq, err := http.NewRequest(http.MethodPost, gatewayURL+"/v1/chat/completions", bytes.NewReader(data))
-	require.NoError(t, err)
+	if err != nil {
+		return 0, err, ""
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if adminAPIKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+adminAPIKey)
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		t.Logf("citest: gateway chat failed with transport error: %v", err)
-		return 0
+		return 0, err, ""
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return resp.StatusCode
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, nil, string(raw)
+}
+
+// PostGatewayChatExpectFailure posts non-stream chat and requires HTTP status >= 400 or transport timeout.
+func PostGatewayChatExpectFailure(t *testing.T, client *http.Client, gatewayURL, adminAPIKey string, req ChatCompletionRequest) int {
+	t.Helper()
+	status, transportErr, body := postGatewayChatHTTPStatus(client, gatewayURL, adminAPIKey, req)
+	if transportErr != nil {
+		t.Logf("citest: gateway chat failed with transport error: %v", transportErr)
+		return 0
 	}
-	t.Fatalf("expected gateway error, got %d: %s", resp.StatusCode, string(body))
-	return resp.StatusCode
+	if status >= 400 {
+		return status
+	}
+	t.Fatalf("expected gateway error, got %d: %s", status, body)
+	return status
+}
+
+// WaitGatewayChatExpectFailure polls until gateway chat returns HTTP >= 400 or a transport error.
+func WaitGatewayChatExpectFailure(t *testing.T, client *http.Client, gatewayURL, adminAPIKey string, req ChatCompletionRequest, wait time.Duration) int {
+	t.Helper()
+	if client == nil {
+		client = GatewayChatClient()
+	}
+	var status int
+	var lastBody string
+	ok := AssertEventually(t, wait, 2*time.Second, func() bool {
+		var transportErr error
+		status, transportErr, lastBody = postGatewayChatHTTPStatus(client, gatewayURL, adminAPIKey, req)
+		if transportErr != nil {
+			lastBody = transportErr.Error()
+			return true
+		}
+		return status >= 400
+	})
+	require.True(t, ok, "gateway chat did not fail within %s (last status=%d body=%s)", wait, status, lastBody)
+	if status == 0 && lastBody != "" {
+		t.Logf("citest: gateway chat failed with transport error: %s", lastBody)
+		return 0
+	}
+	require.NotEqual(t, http.StatusOK, status, "gateway chat should not succeed on stale settled escrow: %s", lastBody)
+	return status
 }

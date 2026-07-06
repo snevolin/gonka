@@ -66,7 +66,7 @@ dev-logs: ## Follow dev overlay logs.
 .PHONY: citest-stack citest-stack-build citest-adversarial citest-observability citest-grpc-transport test-gateway-smoke obs-up obs-down
 citest-stack: ## Phase 8 S1–S6 citest (TESTENV_CITEST=1; needs Docker images + build-devshardd).
 	docker compose $(COMPOSE_BASE) build mock-chain mock-dapi devshardctl versiond-router
-	TESTENV_CITEST=1 go test -tags=testenvci ./citest/ -run 'TestS1_|TestS2_|TestS3_|TestS4_|TestS5_|TestS6_' -count=1 -v -timeout 30m
+	TESTENV_CITEST=1 go test -tags=testenvci ./citest/ -run 'TestS1_|TestS2_|TestS3_|TestS4_|TestS5_|TestS6_' -count=1 -v -timeout 45m
 
 citest-adversarial: ## Phase 9 adversarial citest (TESTENV_CITEST=1; rebuild mock-chain + mock-openai).
 	docker compose $(COMPOSE_BASE) build mock-chain mock-dapi mock-openai devshardctl versiond-router

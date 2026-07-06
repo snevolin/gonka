@@ -60,9 +60,9 @@ CI: `workflow_dispatch` with `integration: true` → `make -C devshard ci-testen
 | **S3** | Params long-poll | Governance patch wakes `GetRuntimeConfig` | `TestS3_ParamsLongPoll` |
 | **S4** | Epoch switch | Epoch advance fast-forwards chain + bumps epoch in long-poll | `TestS4_EpochSwitch` |
 | **S5** | Gateway chat | devshardctl → router → devshardd → mock-openai (stream + non-stream) | `TestS5_GatewayChat` |
-| **S6** | versiond stop | Sticky routing when one versiond is stopped | `TestS6_VersiondStop` |
+| **S6** | versiond fault & restart | Stop without failover; restart with session persistence | `TestS6_VersiondStop`, `TestS6_VersiondRestartPersistence` |
 
-Source: `devshard/testenv/citest/s{1..6}_*.go`.
+Source: `devshard/testenv/citest/s{1..6}_*.go` (S6 spans `s6_versiond_stop_test.go` and `s6_versiond_restart_test.go`).
 
 ### Phase 12 transport scenarios (gRPC-only gateway)
 
@@ -180,10 +180,18 @@ create/settle uses mock-chain gRPC only (see **G3** in
 
 ---
 
-## S6 — versiond stop (fault)
+## S6 — versiond fault & restart
+
+S6 covers two production-shaped versiond lifecycle paths: **upstream stop** (router fault
+semantics) and **stop/start restart** (postgres-backed devshardd recovery with the same
+gateway session).
+
+### S6.1 — versiond stop (fault)
 
 **What we test:** Behaviour when a **sticky upstream versiond is stopped** — nginx does not
 silently proxy to a dead peer; sessions on a live upstream keep working.
+
+**Test:** `TestS6_VersiondStop` (`citest/s6_versiond_stop_test.go`)
 
 **How:**
 
@@ -197,6 +205,31 @@ silently proxy to a dead peer; sessions on a live upstream keep working.
 **Pass criteria:** Fault outcome classified (`FaultRouteFailed` or `FaultRouteRerouted`);
 surviving session keeps working. Documents **no transparent failover** for pinned sessions
 (matching production router semantics).
+
+### S6.2 — versiond restart persistence
+
+**What we test:** The **versiond → devshardd → router → gateway** stack survives versiond
+restarts without losing the active escrow session or regressing nonce/state. `devshardctl`
+stays up; restarted devshardd children recover from Postgres.
+
+**Test:** `TestS6_VersiondRestartPersistence` (`citest/s6_versiond_restart_test.go`)
+
+**How:**
+
+1. Boot S1 stack; wait gateway chat readiness and snapshot session via `/v1/status` +
+   `/v1/debug/state` (`harness.GetGatewaySessionSnapshot`).
+2. Gateway chat #1 — assert session nonce advances (`RequireGatewaySessionAdvanced`).
+3. `docker compose stop` + `start` **one** versiond host (`harness.RestartService`);
+   wait router + session `healthz` (`WaitVersiondSessionHealthy`).
+4. Assert session stable across restart — same escrow, nonce, balance, phase
+   (`RequireGatewaySessionStable`).
+5. Gateway chat #2 — assert nonce advances again.
+6. Restart **all** versiond hosts; wait healthy; assert stable again.
+7. Gateway chat #3 — final nonce advance.
+
+**Pass criteria:** Gateway chat succeeds after each restart; session nonce never regresses;
+balance/phase unchanged immediately after restart (before the next chat). Validates
+persistence across the multi-host topology, not only mock-chain or gateway in-memory state.
 
 ---
 
