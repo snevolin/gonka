@@ -41,17 +41,25 @@ func durationEnvOrDefault(key string, fallback time.Duration) time.Duration {
 	return d
 }
 
-// buildTestappZip creates a zip archive containing the pre-built testapp binary.
-// Returns the zip bytes and sha256 hash.
+// buildTestappZip creates a zip archive containing the pre-built testapp binary
+// at TESTAPP_PATH (protocol slot "testapp"). Returns the zip bytes and sha256 hash.
 func buildTestappZip(t *testing.T) ([]byte, string) {
 	t.Helper()
+	return buildTestappZipFrom(t, envOrDefault("TESTAPP_PATH", "/app/build/testapp"))
+}
 
-	// The testapp binary should be pre-built and available at /app/build/testapp
-	// or via TESTAPP_PATH env var
-	testappPath := envOrDefault("TESTAPP_PATH", "/app/build/testapp")
+// buildTestapp2Zip is the second protocol slot ("testapp2") for multi-version tests.
+func buildTestapp2Zip(t *testing.T) ([]byte, string) {
+	t.Helper()
+	return buildTestappZipFrom(t, envOrDefault("TESTAPP2_PATH", "/app/build/testapp2"))
+}
+
+func buildTestappZipFrom(t *testing.T, testappPath string) ([]byte, string) {
+	t.Helper()
+
 	binData, err := os.ReadFile(testappPath)
 	if err != nil {
-		t.Fatalf("read testapp binary: %v (set TESTAPP_PATH if not at default location)", err)
+		t.Fatalf("read testapp binary %s: %v", testappPath, err)
 	}
 
 	var buf bytes.Buffer
@@ -128,6 +136,9 @@ func deleteVersion(t *testing.T, name string) {
 		t.Fatalf("delete version: %v", err)
 	}
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete version status: %d", resp.StatusCode)
+	}
 }
 
 // deleteAllVersions removes every version from the mock oracle.
@@ -162,6 +173,26 @@ func setOracleFailure(t *testing.T, enabled bool) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("set oracle failure status: %d", resp.StatusCode)
+	}
+}
+
+// assertOracleFailureMode verifies mock oracle GET /versions reflects failure mode.
+func assertOracleFailureMode(t *testing.T, wantFailure bool) {
+	t.Helper()
+	resp, err := http.Get(oracleURL + "/versions")
+	if err != nil {
+		t.Fatalf("GET oracle versions: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if wantFailure {
+		if resp.StatusCode != http.StatusInternalServerError {
+			t.Fatalf("oracle failure mode: status = %d, want 500", resp.StatusCode)
+		}
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("oracle healthy mode: status = %d, want 200", resp.StatusCode)
 	}
 }
 

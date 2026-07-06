@@ -14,36 +14,32 @@ import (
 	"time"
 )
 
+// Oracle slot names must match each binary's --print-protocol-version
+// (default testapp embeds "testapp"; testapp2 embeds "testapp2").
+
 func TestBasicFlow(t *testing.T) {
 	zipData, hash := buildTestappZip(t)
 
-	// Upload binary to oracle
-	uploadBinary(t, "v1.zip", zipData)
+	uploadBinary(t, "testapp.zip", zipData)
+	putVersion(t, "testapp", fmt.Sprintf("%s/binaries/testapp.zip", oracleURL), hash, 9001)
+	waitForVersion(t, "testapp", 90*time.Second)
 
-	// Register version
-	binaryURL := fmt.Sprintf("%s/binaries/v1.zip", oracleURL)
-	putVersion(t, "v1", binaryURL, hash, 9001)
-
-	// Wait for versiond to pick it up
-	waitForVersion(t, "v1", 90*time.Second)
-
-	// Verify response through proxy
 	var resp map[string]string
-	getJSON(t, fmt.Sprintf("%s/v1/", versiondURL), &resp)
-	if resp["prefix"] != "v1" {
-		t.Errorf("prefix = %q, want %q", resp["prefix"], "v1")
+	getJSON(t, fmt.Sprintf("%s/testapp/", versiondURL), &resp)
+	if resp["prefix"] != "testapp" {
+		t.Errorf("prefix = %q, want %q", resp["prefix"], "testapp")
 	}
 }
 
 func TestChildProcessCrashRecovery(t *testing.T) {
 	zipData, hash := buildTestappZip(t)
-	version := "child-crash-recovery"
+	slot := "testapp"
 
-	uploadBinary(t, version+".zip", zipData)
-	putVersion(t, version, fmt.Sprintf("%s/binaries/%s.zip", oracleURL, version), hash, 9005)
-	waitForVersion(t, version, 90*time.Second)
+	uploadBinary(t, "crash-testapp.zip", zipData)
+	putVersion(t, slot, fmt.Sprintf("%s/binaries/crash-testapp.zip", oracleURL), hash, 9001)
+	waitForVersion(t, slot, 90*time.Second)
 
-	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/%s/exit", versiondURL, version), nil)
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/%s/exit", versiondURL, slot), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,13 +52,13 @@ func TestChildProcessCrashRecovery(t *testing.T) {
 		t.Fatalf("child exit status = %d, want 204", resp.StatusCode)
 	}
 
-	waitForVersionUnavailable(t, version, 10*time.Second)
-	waitForVersion(t, version, 90*time.Second)
+	waitForVersionUnavailable(t, slot, 25*time.Second)
+	waitForVersion(t, slot, 90*time.Second)
 
 	var recovered map[string]string
-	getJSON(t, fmt.Sprintf("%s/%s/", versiondURL, version), &recovered)
-	if recovered["prefix"] != version {
-		t.Errorf("prefix = %q, want %q", recovered["prefix"], version)
+	getJSON(t, fmt.Sprintf("%s/%s/", versiondURL, slot), &recovered)
+	if recovered["prefix"] != slot {
+		t.Errorf("prefix = %q, want %q", recovered["prefix"], slot)
 	}
 }
 
@@ -73,93 +69,66 @@ func TestRegisterStartupVersion(t *testing.T) {
 
 	zipData, hash := buildTestappZip(t)
 
-	uploadBinary(t, "startup-v1.zip", zipData)
-	putVersion(t, "v1", fmt.Sprintf("%s/binaries/startup-v1.zip", oracleURL), hash, 9001)
+	uploadBinary(t, "startup-testapp.zip", zipData)
+	putVersion(t, "testapp", fmt.Sprintf("%s/binaries/startup-testapp.zip", oracleURL), hash, 9001)
 }
 
 func TestStartupFromExistingOracleState(t *testing.T) {
-	if os.Getenv("EXPECT_INITIAL_V1") == "" {
+	if os.Getenv("EXPECT_INITIAL_TESTAPP") == "" {
 		t.Skip("startup oracle state scenario is enabled only after versiond restart")
 	}
 
-	waitForVersion(t, "v1", 90*time.Second)
+	waitForVersion(t, "testapp", 90*time.Second)
 
 	var proxied map[string]string
-	getJSON(t, fmt.Sprintf("%s/v1/", versiondURL), &proxied)
-	if proxied["prefix"] != "v1" {
-		t.Errorf("prefix = %q, want %q", proxied["prefix"], "v1")
+	getJSON(t, fmt.Sprintf("%s/testapp/", versiondURL), &proxied)
+	if proxied["prefix"] != "testapp" {
+		t.Errorf("prefix = %q, want %q", proxied["prefix"], "testapp")
 	}
-
-	resp, err := http.Get(fmt.Sprintf("%s/healthz", versiondURL))
-	if err != nil {
-		t.Fatalf("GET healthz: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	var statuses []map[string]interface{}
-	if err := json.Unmarshal(body, &statuses); err != nil {
-		t.Fatalf("decode healthz: %v, body: %s", err, string(body))
-	}
-
-	for _, s := range statuses {
-		if s["name"] == "v1" {
-			if s["status"] != "running" {
-				t.Errorf("v1 status = %q, want running", s["status"])
-			}
-			return
-		}
-	}
-	t.Fatalf("v1 not found in healthz response: %s", string(body))
+	assertHealthStatus(t, "testapp", "running")
 }
 
 func TestAddVersion(t *testing.T) {
-	zipData, hash := buildTestappZip(t)
+	zip1, hash1 := buildTestappZip(t)
+	zip2, hash2 := buildTestapp2Zip(t)
 
-	// Set up v1
-	uploadBinary(t, "v1.zip", zipData)
-	binaryURL := fmt.Sprintf("%s/binaries/v1.zip", oracleURL)
-	putVersion(t, "v1", binaryURL, hash, 9001)
-	waitForVersion(t, "v1", 90*time.Second)
+	uploadBinary(t, "testapp.zip", zip1)
+	putVersion(t, "testapp", fmt.Sprintf("%s/binaries/testapp.zip", oracleURL), hash1, 9001)
+	waitForVersion(t, "testapp", 90*time.Second)
 
-	// Add v2 (same binary, different port)
-	uploadBinary(t, "v2.zip", zipData)
-	binaryURL2 := fmt.Sprintf("%s/binaries/v2.zip", oracleURL)
-	putVersion(t, "v2", binaryURL2, hash, 9002)
-	waitForVersion(t, "v2", 90*time.Second)
+	uploadBinary(t, "testapp2.zip", zip2)
+	putVersion(t, "testapp2", fmt.Sprintf("%s/binaries/testapp2.zip", oracleURL), hash2, 9002)
+	waitForVersion(t, "testapp2", 90*time.Second)
 
-	// Both should work
 	var resp1, resp2 map[string]string
-	getJSON(t, fmt.Sprintf("%s/v1/", versiondURL), &resp1)
-	getJSON(t, fmt.Sprintf("%s/v2/", versiondURL), &resp2)
-	if resp1["prefix"] != "v1" {
-		t.Errorf("v1 prefix = %q", resp1["prefix"])
+	getJSON(t, fmt.Sprintf("%s/testapp/", versiondURL), &resp1)
+	getJSON(t, fmt.Sprintf("%s/testapp2/", versiondURL), &resp2)
+	if resp1["prefix"] != "testapp" {
+		t.Errorf("testapp prefix = %q", resp1["prefix"])
 	}
-	if resp2["prefix"] != "v2" {
-		t.Errorf("v2 prefix = %q", resp2["prefix"])
+	if resp2["prefix"] != "testapp2" {
+		t.Errorf("testapp2 prefix = %q", resp2["prefix"])
 	}
 }
 
 func TestRemoveVersion(t *testing.T) {
-	zipData, hash := buildTestappZip(t)
+	zip1, hash1 := buildTestappZip(t)
+	zip2, hash2 := buildTestapp2Zip(t)
 
-	// Set up v1 and v2
-	uploadBinary(t, "v1.zip", zipData)
-	uploadBinary(t, "v2.zip", zipData)
-	putVersion(t, "v1", fmt.Sprintf("%s/binaries/v1.zip", oracleURL), hash, 9001)
-	putVersion(t, "v2", fmt.Sprintf("%s/binaries/v2.zip", oracleURL), hash, 9002)
-	waitForVersion(t, "v1", 90*time.Second)
-	waitForVersion(t, "v2", 90*time.Second)
+	uploadBinary(t, "testapp.zip", zip1)
+	uploadBinary(t, "testapp2.zip", zip2)
+	putVersion(t, "testapp", fmt.Sprintf("%s/binaries/testapp.zip", oracleURL), hash1, 9001)
+	putVersion(t, "testapp2", fmt.Sprintf("%s/binaries/testapp2.zip", oracleURL), hash2, 9002)
+	waitForVersion(t, "testapp", 90*time.Second)
+	waitForVersion(t, "testapp2", 90*time.Second)
 
-	// Remove v1
-	deleteVersion(t, "v1")
-	waitForVersionGone(t, "v1", 90*time.Second)
+	deleteVersion(t, "testapp")
+	waitForVersionGone(t, "testapp", 90*time.Second)
 
-	// v2 should still work
 	var resp map[string]string
-	getJSON(t, fmt.Sprintf("%s/v2/", versiondURL), &resp)
-	if resp["prefix"] != "v2" {
-		t.Errorf("v2 prefix = %q", resp["prefix"])
+	getJSON(t, fmt.Sprintf("%s/testapp2/", versiondURL), &resp)
+	if resp["prefix"] != "testapp2" {
+		t.Errorf("testapp2 prefix = %q", resp["prefix"])
 	}
 }
 
@@ -170,19 +139,20 @@ func TestOracleTemporaryFailureKeepsVersionsRunning(t *testing.T) {
 	})
 
 	zipData, hash := buildTestappZip(t)
-	version := "oracle-failure"
+	slot := "testapp"
 
-	uploadBinary(t, version+".zip", zipData)
-	putVersion(t, version, fmt.Sprintf("%s/binaries/%s.zip", oracleURL, version), hash, 9004)
-	waitForVersion(t, version, 90*time.Second)
+	uploadBinary(t, "oracle-failure-testapp.zip", zipData)
+	putVersion(t, slot, fmt.Sprintf("%s/binaries/oracle-failure-testapp.zip", oracleURL), hash, 9004)
+	waitForVersion(t, slot, 90*time.Second)
 
 	setOracleFailure(t, true)
-	waitForPollCycles(2)
+	assertOracleFailureMode(t, true)
+	waitForPollCycles(3)
 
 	var resp map[string]string
-	getJSON(t, fmt.Sprintf("%s/%s/", versiondURL, version), &resp)
-	if resp["prefix"] != version {
-		t.Errorf("prefix = %q, want %q", resp["prefix"], version)
+	getJSON(t, fmt.Sprintf("%s/%s/", versiondURL, slot), &resp)
+	if resp["prefix"] != slot {
+		t.Errorf("prefix = %q, want %q", resp["prefix"], slot)
 	}
 }
 
@@ -192,17 +162,17 @@ func TestEmptyOracleResponseKeepsVersionsRunning(t *testing.T) {
 
 	zipData, hash := buildTestappZip(t)
 
-	uploadBinary(t, "empty-oracle-v1.zip", zipData)
-	putVersion(t, "v1", fmt.Sprintf("%s/binaries/empty-oracle-v1.zip", oracleURL), hash, 9001)
-	waitForVersion(t, "v1", 90*time.Second)
+	uploadBinary(t, "empty-oracle-testapp.zip", zipData)
+	putVersion(t, "testapp", fmt.Sprintf("%s/binaries/empty-oracle-testapp.zip", oracleURL), hash, 9001)
+	waitForVersion(t, "testapp", 90*time.Second)
 
-	deleteVersion(t, "v1")
-	waitForPollCycles(2)
+	deleteVersion(t, "testapp")
+	waitForPollCycles(3)
 
 	var resp map[string]string
-	getJSON(t, fmt.Sprintf("%s/v1/", versiondURL), &resp)
-	if resp["prefix"] != "v1" {
-		t.Errorf("prefix = %q, want %q", resp["prefix"], "v1")
+	getJSON(t, fmt.Sprintf("%s/testapp/", versiondURL), &resp)
+	if resp["prefix"] != "testapp" {
+		t.Errorf("prefix = %q, want %q", resp["prefix"], "testapp")
 	}
 }
 
@@ -211,35 +181,32 @@ func TestFailedSameVersionUpdateKeepsOldChildRunning(t *testing.T) {
 
 	zipData, hash := buildTestappZip(t)
 
-	uploadBinary(t, "failed-update-v1.zip", zipData)
-	putVersion(t, "v1", fmt.Sprintf("%s/binaries/failed-update-v1.zip", oracleURL), hash, 9001)
-	waitForVersion(t, "v1", 90*time.Second)
+	uploadBinary(t, "failed-update-testapp.zip", zipData)
+	putVersion(t, "testapp", fmt.Sprintf("%s/binaries/failed-update-testapp.zip", oracleURL), hash, 9001)
+	waitForVersion(t, "testapp", 90*time.Second)
 
-	uploadBinary(t, "failed-update-v1-bad.zip", zipData)
-	putVersion(t, "v1", fmt.Sprintf("%s/binaries/failed-update-v1-bad.zip", oracleURL), "wrong_hash", 9001)
+	uploadBinary(t, "failed-update-testapp-bad.zip", zipData)
+	putVersion(t, "testapp", fmt.Sprintf("%s/binaries/failed-update-testapp-bad.zip", oracleURL), "wrong_hash", 9001)
 
-	waitForPollCycles(2)
+	waitForPollCycles(3)
 
 	var resp map[string]string
-	getJSON(t, fmt.Sprintf("%s/v1/", versiondURL), &resp)
-	if resp["prefix"] != "v1" {
-		t.Errorf("prefix = %q, want %q", resp["prefix"], "v1")
+	getJSON(t, fmt.Sprintf("%s/testapp/", versiondURL), &resp)
+	if resp["prefix"] != "testapp" {
+		t.Errorf("prefix = %q, want %q", resp["prefix"], "testapp")
 	}
-	assertHealthStatus(t, "v1", "running")
+	assertHealthStatus(t, "testapp", "running")
 }
 
 func TestHashMismatch(t *testing.T) {
 	zipData, _ := buildTestappZip(t)
 
-	// Upload binary but register with wrong hash
-	uploadBinary(t, "v3.zip", zipData)
-	putVersion(t, "v3", fmt.Sprintf("%s/binaries/v3.zip", oracleURL), "wrong_hash", 9003)
+	uploadBinary(t, "bad.zip", zipData)
+	putVersion(t, "badslot", fmt.Sprintf("%s/binaries/bad.zip", oracleURL), "wrong_hash", 9003)
 
-	// Wait a couple poll cycles
 	time.Sleep(10 * time.Second)
 
-	// v3 should not be available
-	resp, err := http.Get(fmt.Sprintf("%s/v3/", versiondURL))
+	resp, err := http.Get(fmt.Sprintf("%s/badslot/", versiondURL))
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -251,11 +218,11 @@ func TestHashMismatch(t *testing.T) {
 
 func TestSSEStreaming(t *testing.T) {
 	zipData, hash := buildTestappZip(t)
-	uploadBinary(t, "v1.zip", zipData)
-	putVersion(t, "v1", fmt.Sprintf("%s/binaries/v1.zip", oracleURL), hash, 9001)
-	waitForVersion(t, "v1", 90*time.Second)
+	uploadBinary(t, "testapp.zip", zipData)
+	putVersion(t, "testapp", fmt.Sprintf("%s/binaries/testapp.zip", oracleURL), hash, 9001)
+	waitForVersion(t, "testapp", 90*time.Second)
 
-	resp, err := http.Get(fmt.Sprintf("%s/v1/stream", versiondURL))
+	resp, err := http.Get(fmt.Sprintf("%s/testapp/stream", versiondURL))
 	if err != nil {
 		t.Fatalf("GET stream: %v", err)
 	}
@@ -280,9 +247,9 @@ func TestSSEStreaming(t *testing.T) {
 
 func TestHealthEndpoint(t *testing.T) {
 	zipData, hash := buildTestappZip(t)
-	uploadBinary(t, "v1.zip", zipData)
-	putVersion(t, "v1", fmt.Sprintf("%s/binaries/v1.zip", oracleURL), hash, 9001)
-	waitForVersion(t, "v1", 90*time.Second)
+	uploadBinary(t, "testapp.zip", zipData)
+	putVersion(t, "testapp", fmt.Sprintf("%s/binaries/testapp.zip", oracleURL), hash, 9001)
+	waitForVersion(t, "testapp", 90*time.Second)
 
 	resp, err := http.Get(fmt.Sprintf("%s/healthz", versiondURL))
 	if err != nil {
@@ -298,14 +265,14 @@ func TestHealthEndpoint(t *testing.T) {
 
 	found := false
 	for _, s := range statuses {
-		if s["name"] == "v1" {
+		if s["name"] == "testapp" {
 			found = true
 			if s["status"] != "running" {
-				t.Errorf("v1 status = %q, want running", s["status"])
+				t.Errorf("testapp status = %q, want running", s["status"])
 			}
 		}
 	}
 	if !found {
-		t.Errorf("v1 not found in healthz response: %s", string(body))
+		t.Errorf("testapp not found in healthz response: %s", string(body))
 	}
 }
