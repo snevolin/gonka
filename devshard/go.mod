@@ -1,6 +1,6 @@
 module devshard
 
-go 1.24.2
+go 1.25.9
 
 replace (
 	common => ../common
@@ -13,6 +13,7 @@ require (
 	github.com/cometbft/cometbft v0.38.21
 	github.com/cosmos/btcutil v1.0.5
 	github.com/cosmos/cosmos-sdk v0.50.14
+	github.com/cosmos/gogoproto v1.7.0
 	github.com/ethereum/go-ethereum v1.17.2
 	github.com/goccy/go-json v0.10.5
 	github.com/jackc/pgx/v5 v5.8.0
@@ -27,7 +28,6 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.39.0
 	go.opentelemetry.io/otel/sdk v1.40.0
 	go.opentelemetry.io/otel/trace v1.40.0
-	go.uber.org/goleak v1.3.0
 	golang.org/x/crypto v0.48.0
 	golang.org/x/sync v0.19.0
 	golang.org/x/time v0.14.0
@@ -108,7 +108,6 @@ require (
 	github.com/cosmos/cosmos-proto v1.0.0-beta.5 // indirect
 	github.com/cosmos/go-bip39 v1.0.0 // indirect
 	github.com/cosmos/gogogateway v1.2.0 // indirect
-	github.com/cosmos/gogoproto v1.7.0 // indirect
 	github.com/cosmos/iavl v1.2.4 // indirect
 	github.com/cosmos/ibc-go/modules/capability v1.0.1 // indirect
 	github.com/cosmos/ibc-go/v8 v8.7.0 // indirect
