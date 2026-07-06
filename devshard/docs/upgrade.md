@@ -124,7 +124,10 @@ make devshardd-build DEVSHARD_VERSION=v2 DEVSHARD_BINARY_VERSION=0.2.13-v2-r2
 ```
 
 versiond verifies `--print-protocol-version` matches the slot name before start.
-devshardd checks `DEVSHARD_BINARY_LOG_VERSION` matches `--print-binary-version`.
+When that flag is absent, versiond trusts the governance slot name and skips
+the embed check. When `--print-binary-version` is absent, versiond sets
+`DEVSHARD_BINARY_LOG_VERSION` to the slot name (legacy path). devshardd accepts
+that value when it matches the link-time protocol name.
 
 **Legacy path:** `/v1/devshard/*` uses `v1` as the protocol tag (embedded dapi
 and historical sessions).

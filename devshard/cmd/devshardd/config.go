@@ -109,7 +109,11 @@ func loadRuntimeConfig(args []string, protocolVersion, linkBinaryVersion string)
 		return runtimeConfig{}, fmt.Errorf("empty protocol version")
 	}
 
-	binaryLogVersion, err := validateBinaryLogVersion(os.Getenv("DEVSHARD_BINARY_LOG_VERSION"), linkBinaryVersion)
+	binaryLogVersion, err := validateBinaryLogVersion(
+		os.Getenv("DEVSHARD_BINARY_LOG_VERSION"),
+		linkBinaryVersion,
+		protocolVersion,
+	)
 	if err != nil {
 		return runtimeConfig{}, fmt.Errorf("binary log version: %w", err)
 	}
@@ -139,7 +143,9 @@ func loadRuntimeConfig(args []string, protocolVersion, linkBinaryVersion string)
 
 // validateBinaryLogVersion checks DEVSHARD_BINARY_LOG_VERSION against the link-time
 // binary stamp. When unset (standalone), the link stamp is used for log prefix.
-func validateBinaryLogVersion(envValue, linkBinaryVersion string) (string, error) {
+// When versiond passes the governance slot name (legacy path: binary lacks
+// --print-binary-version), env matching protocolVersion is accepted.
+func validateBinaryLogVersion(envValue, linkBinaryVersion, protocolVersion string) (string, error) {
 	if envValue == "" {
 		if linkBinaryVersion == "" {
 			return "", fmt.Errorf("empty link binary version")
@@ -149,10 +155,10 @@ func validateBinaryLogVersion(envValue, linkBinaryVersion string) (string, error
 	if linkBinaryVersion == "" {
 		return "", fmt.Errorf("binary log version %q provided but link stamp is empty", envValue)
 	}
-	if envValue != linkBinaryVersion {
-		return envValue, fmt.Errorf("binary log version %q does not match link stamp %q", envValue, linkBinaryVersion)
+	if envValue == linkBinaryVersion || envValue == protocolVersion {
+		return envValue, nil
 	}
-	return envValue, nil
+	return envValue, fmt.Errorf("binary log version %q does not match link stamp %q", envValue, linkBinaryVersion)
 }
 
 // loadNodeConfigFromEnv builds a ChainNodeConfig from the same env vars

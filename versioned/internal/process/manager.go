@@ -538,23 +538,9 @@ func (m *Manager) runChild(ctx context.Context, c *child) {
 		return
 	}
 
-	binaryLogVersion, err := readBinaryLogVersion(binPath)
+	preflight, err := preflightChild(binPath, c.version.Name)
 	if err != nil {
-		slog.Error("read binary log version failed", "version", c.version.Name, "bin", binPath, "error", err)
-		return
-	}
-	embeddedProtocol, err := readProtocolVersion(binPath)
-	if err != nil {
-		slog.Error("read protocol version failed", "version", c.version.Name, "bin", binPath, "error", err)
-		return
-	}
-	if embeddedProtocol != c.version.Name {
-		slog.Error(
-			"binary protocol mismatch",
-			"slot", c.version.Name,
-			"embedded", embeddedProtocol,
-			"bin", binPath,
-		)
+		slog.Error("child preflight failed", "version", c.version.Name, "bin", binPath, "error", err)
 		return
 	}
 
@@ -572,7 +558,7 @@ func (m *Manager) runChild(ctx context.Context, c *child) {
 			"--data-dir", dataDir,
 			"--port", fmt.Sprintf("%d", c.port),
 		)
-		cmd.Env = childEnv(binaryLogVersion)
+		cmd.Env = childEnv(preflight.binaryLogVersion)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -637,9 +623,13 @@ func (m *Manager) runChild(ctx context.Context, c *child) {
 }
 
 // childEnv sets per-child env vars for devshardd (and testapp in e2e).
-// binaryLogVersion is the link-time build id (e.g. 0.2.13-v2-r2), not the
-// protocol slot name (v2).
+// binaryLogVersion is normally the link-time build id from --print-binary-version
+// (e.g. 0.2.13-v2-r2). Legacy binaries without that flag use the governance
+// slot name (e.g. v2) instead.
 func childEnv(binaryLogVersion string) []string {
+	if binaryLogVersion == "" {
+		return os.Environ()
+	}
 	return append(
 		os.Environ(),
 		fmt.Sprintf("DEVSHARD_BINARY_LOG_VERSION=%s", binaryLogVersion),
